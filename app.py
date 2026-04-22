@@ -154,17 +154,3 @@ with col_right:
     elif not clicked:
         st.info("왼쪽에 한국어 텍스트를 입력하고 '번역 →' 버튼을 누르세요.")
 
-# ── Applied rules summary ─────────────────────────────────────────────────────
-st.divider()
-with st.expander("🔧 적용 중인 후처리 규칙 목록"):
-    rule_lines = [
-        "**[열화 표현]** deteriorate→degrade, decay→degrade  (corpus: degrade 109x >> deteriorate 27x)",
-        "**[대문자]** coulombic → Coulombic efficiency",
-        "**[선호 용어]** capacity maintenance→retention, negative electrode→anode, positive electrode→cathode",
-        "**[인과 표현]** is due to → is attributed to  (corpus: 203x)",
-        "**[도표]** fig. N → Figure N",
-        "**[서론 마커]** In this paper → In this work",
-        "**[불필요 강조어]** very/really 제거",
-    ]
-    for line in rule_lines:
-        st.markdown(f"- {line}")
