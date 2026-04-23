@@ -1,4 +1,5 @@
 import re
+import difflib
 from io import BytesIO
 import streamlit as st
 from deep_translator import GoogleTranslator
@@ -7,97 +8,179 @@ from docx.shared import Pt
 from docx.enum.text import WD_LINE_SPACING, WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 
-# ── 스타일 교정 규칙 (corpus 분석 기반) ──────────────────────────────────────
+# ── 스타일 교정 규칙 ──────────────────────────────────────────────────────────
 RULES = [
-    # Degradation vocabulary
-    (r'\bdeterioration\b',  'degradation',              re.IGNORECASE),
-    (r'\bdeteriorates\b',   'degrades',                 re.IGNORECASE),
-    (r'\bdeteriorated\b',   'degraded',                 re.IGNORECASE),
-    (r'\bdeteriorating\b',  'degrading',                re.IGNORECASE),
-    (r'\bdeteriorate\b',    'degrade',                  re.IGNORECASE),
-    (r'\bdecayed\b',        'degraded',                 re.IGNORECASE),
-    (r'\bdecays\b',         'degrades',                 re.IGNORECASE),
-    (r'\bdecay\b(?!\s+rate)', 'degrade',               re.IGNORECASE),
-    # Capitalization
+    # ── Degradation vocabulary (degrade >> deteriorate >> decay >> fade)
+    (r'\bdeterioration\b',          'degradation',                  re.IGNORECASE),
+    (r'\bdeteriorates\b',           'degrades',                     re.IGNORECASE),
+    (r'\bdeteriorated\b',           'degraded',                     re.IGNORECASE),
+    (r'\bdeteriorating\b',          'degrading',                    re.IGNORECASE),
+    (r'\bdeteriorate\b',            'degrade',                      re.IGNORECASE),
+    (r'\bdecayed\b',                'degraded',                     re.IGNORECASE),
+    (r'\bdecays\b',                 'degrades',                     re.IGNORECASE),
+    (r'\bdecay\b(?!\s+rate)',        'degrade',                      re.IGNORECASE),
+    (r'\bfaded\b(?=.*capacity)',     'degraded',                     re.IGNORECASE),
+    # ── Capitalization
     (r'\binitial coulombic efficiency\b', 'initial Coulombic efficiency', re.IGNORECASE),
-    (r'\bcoulombic efficiency\b',         'Coulombic efficiency',         re.IGNORECASE),
-    # Preferred technical terms
-    (r'\bcapacity maintenance\b',   'capacity retention',           re.IGNORECASE),
-    (r'\bcapacity keeping\b',       'capacity retention',           re.IGNORECASE),
-    (r'\bcapacity preservation\b',  'capacity retention',           re.IGNORECASE),
-    (r'\bcycling performance\b',    'cycling stability',            re.IGNORECASE),
-    (r'\bcycle performance\b',      'cycling stability',            re.IGNORECASE),
-    (r'\bcycle stability\b',        'cycling stability',            re.IGNORECASE),
-    (r'\brate performance\b',       'rate capability',              re.IGNORECASE),
-    (r'\bnegative electrode\b',     'anode',                        re.IGNORECASE),
-    (r'\bpositive electrode\b',     'cathode',                      re.IGNORECASE),
+    (r'\bcoulombic efficiency\b',    'Coulombic efficiency',         re.IGNORECASE),
+    # ── Technical terms
+    (r'\bcapacity maintenance\b',    'capacity retention',           re.IGNORECASE),
+    (r'\bcapacity keeping\b',        'capacity retention',           re.IGNORECASE),
+    (r'\bcapacity preservation\b',   'capacity retention',           re.IGNORECASE),
+    (r'\bcycling performance\b',     'cycling stability',            re.IGNORECASE),
+    (r'\bcycle performance\b',       'cycling stability',            re.IGNORECASE),
+    (r'\bcycle stability\b',         'cycling stability',            re.IGNORECASE),
+    (r'\brate performance\b',        'rate capability',              re.IGNORECASE),
+    (r'\bnegative electrode\b',      'anode',                        re.IGNORECASE),
+    (r'\bpositive electrode\b',      'cathode',                      re.IGNORECASE),
     (r'\bsolid electrolyte interface\b', 'solid electrolyte interphase', re.IGNORECASE),
-    (r'\bSEI interface\b',          'SEI layer',                    0),
-    (r'\bvolumetric swelling\b',    'volume expansion',             re.IGNORECASE),
-    (r'\bparticle pulverization\b', 'pulverization',                re.IGNORECASE),
-    (r'\bparticle cracking\b',      'cracking',                     re.IGNORECASE),
-    (r'\bparticle fragmentation\b', 'pulverization',                re.IGNORECASE),
-    (r'\bstructural stability\b',   'structural integrity',         re.IGNORECASE),
-    (r'\blow cycle life\b',         'poor cyclability',             re.IGNORECASE),
-    (r'\bshort cycle life\b',       'limited cyclability',          re.IGNORECASE),
-    (r'\blong lifespan\b',          'long cycle life',              re.IGNORECASE),
-    (r'\bpoor conductivity\b',      'low electrical conductivity',  re.IGNORECASE),
-    (r'\bfast charging\b',          'fast-charging',                re.IGNORECASE),
-    # Verb preferences
-    (r'\bdemonstrates a\b',         'shows a',                      re.IGNORECASE),
-    (r'\bdemonstrated a\b',         'showed a',                     re.IGNORECASE),
-    # Causal attribution
-    (r'\bis due to\b',              'is attributed to',             re.IGNORECASE),
-    (r'\bare due to\b',             'are attributed to',            re.IGNORECASE),
-    # Figure formatting
-    (r'\bfig\.\s*(\d)',             r'Figure \1',                   0),
-    (r'\bfig\s+(\d)',               r'Figure \1',                   0),
-    # Colloquial → formal
-    (r'\bIn this paper,\b',         'In this work,',                0),
-    (r'\bthanks to\b',              'Owing to',                     re.IGNORECASE),
-    (r'\bAs a result of this\b',    'Consequently',                 re.IGNORECASE),
-    (r'\bSo,\b',                    'Therefore,',                   0),
-    (r'\bso,\b',                    'therefore,',                   0),
-    (r'\bgot\b',                    'obtained',                     re.IGNORECASE),
-    (r'\busually\b',                'typically',                    re.IGNORECASE),
-    # Intensifiers
-    (r'\bvery significantly\b',     'significantly',                re.IGNORECASE),
-    (r'\bquite significantly\b',    'significantly',                re.IGNORECASE),
-    (r'\breally\b',                 '',                             re.IGNORECASE),
+    (r'\bSEI interface\b',           'SEI layer',                    0),
+    (r'\bvolumetric swelling\b',     'volume expansion',             re.IGNORECASE),
+    (r'\bvolumetric expansion\b',    'volume expansion',             re.IGNORECASE),
+    (r'\bparticle pulverization\b',  'pulverization',                re.IGNORECASE),
+    (r'\bparticle cracking\b',       'cracking',                     re.IGNORECASE),
+    (r'\bparticle fragmentation\b',  'pulverization',                re.IGNORECASE),
+    (r'\bstructural stability\b',    'structural integrity',         re.IGNORECASE),
+    (r'\blow cycle life\b',          'poor cyclability',             re.IGNORECASE),
+    (r'\bshort cycle life\b',        'limited cyclability',          re.IGNORECASE),
+    (r'\blong lifespan\b',           'long cycle life',              re.IGNORECASE),
+    (r'\bpoor conductivity\b',       'low electrical conductivity',  re.IGNORECASE),
+    (r'\bfast charging\b',           'fast-charging',                re.IGNORECASE),
+    (r'\bSi based\b',                'Si-based',                     0),
+    (r'\bcarbon based\b',            'carbon-based',                 re.IGNORECASE),
+    (r'\bgraphene based\b',          'graphene-based',               re.IGNORECASE),
+    # ── Verb preferences
+    (r'\bdemonstrates a\b',          'shows a',                      re.IGNORECASE),
+    (r'\bdemonstrated a\b',          'showed a',                     re.IGNORECASE),
+    (r'\bpresents a\b',              'exhibits a',                   re.IGNORECASE),
+    # ── Causal attribution
+    (r'\bis due to\b',               'is attributed to',             re.IGNORECASE),
+    (r'\bare due to\b',              'are attributed to',            re.IGNORECASE),
+    (r'\bresulted from\b',           'arose from',                   re.IGNORECASE),
+    # ── Figure formatting
+    (r'\bfig\.\s*(\d)',              r'Figure \1',                   0),
+    (r'\bfig\s+(\d)',                r'Figure \1',                   0),
+    # ── Introduction / Conclusion markers (Rules 3 & 4)
+    (r'\bIn this paper,',            'In this work,',                0),
+    (r'\bin this paper,',            'in this work,',                0),
+    (r'\bIn conclusion,',            'In summary,',                  0),
+    (r'\bIn conclusions,',           'In summary,',                  0),
+    (r'(?m)^But\b',                  'However,',                     0),
+    (r'(?<=[.!?] )But\b',            'However,',                     0),
+    # ── Self-reference: "the authors" → "we"
+    (r'\bthe authors\b',             'we',                           re.IGNORECASE),
+    (r'\bthe present authors\b',     'we',                           re.IGNORECASE),
+    (r'\bthe present study\b',       'this work',                    re.IGNORECASE),
+    # ── Contractions (Rule 10 – no contractions in formal writing)
+    (r"\bit's\b",                    'it is',                        re.IGNORECASE),
+    (r"\bdon't\b",                   'do not',                       re.IGNORECASE),
+    (r"\bcan't\b",                   'cannot',                       re.IGNORECASE),
+    (r"\bisn't\b",                   'is not',                       re.IGNORECASE),
+    (r"\bwasn't\b",                  'was not',                      re.IGNORECASE),
+    (r"\baren't\b",                  'are not',                      re.IGNORECASE),
+    (r"\bweren't\b",                 'were not',                     re.IGNORECASE),
+    (r"\bwon't\b",                   'will not',                     re.IGNORECASE),
+    (r"\bdidn't\b",                  'did not',                      re.IGNORECASE),
+    (r"\bhasn't\b",                  'has not',                      re.IGNORECASE),
+    (r"\bhaven't\b",                 'have not',                     re.IGNORECASE),
+    (r"\bdoesn't\b",                 'does not',                     re.IGNORECASE),
+    # ── Informal / weak words (Rule 10)
+    (r'\ba lot of\b',                'significant',                  re.IGNORECASE),
+    (r'\blots of\b',                 'numerous',                     re.IGNORECASE),
+    (r'\bthanks to\b',               'owing to',                     re.IGNORECASE),
+    (r'\bSo,\b',                     'Therefore,',                   0),
+    (r'\bso,\b',                     'therefore,',                   0),
+    (r'\bgot\b',                     'obtained',                     re.IGNORECASE),
+    (r'\busually\b',                 'typically',                    re.IGNORECASE),
+    (r'\bvery significantly\b',      'significantly',                re.IGNORECASE),
+    (r'\bquite\b',                   '',                             re.IGNORECASE),
+    (r'\breally\b',                  '',                             re.IGNORECASE),
+    (r'\bvery high\b',               'significantly high',           re.IGNORECASE),
+    (r'\bvery low\b',                'significantly low',            re.IGNORECASE),
+    (r'\bvery large\b',              'substantially large',          re.IGNORECASE),
+    (r'\bvery small\b',              'considerably small',           re.IGNORECASE),
+    (r'\bvery fast\b',               'markedly fast',                re.IGNORECASE),
+    (r'\bvery stable\b',             'highly stable',                re.IGNORECASE),
+    (r'\bvery good\b',               'excellent',                    re.IGNORECASE),
+    # ── Register / formality
+    (r'\bAs a result of this\b',     'Consequently',                 re.IGNORECASE),
+    (r'\bIn addition to this,\b',    'Furthermore,',                 re.IGNORECASE),
+    (r'\btakes advantage of\b',      'leverages',                    re.IGNORECASE),
+    (r'\binherent problems\b',       'intrinsic challenges',         re.IGNORECASE),
+    (r'\bmainstream\b',              'predominant',                  re.IGNORECASE),
 ]
 
-# ── 한국어 배터리 용어 선치환 (번역 전) ──────────────────────────────────────
-# 길이가 긴 표현을 먼저 처리해야 하위 단어가 덮어쓰이지 않음
+
+def apply_style_rules(text: str) -> str:
+    for pattern, repl, flags in RULES:
+        text = re.sub(pattern, repl, text, flags=flags) if flags else re.sub(pattern, repl, text)
+    text = re.sub(r'  +', ' ', text)
+    return text
+
+
+def count_corrections(original: str, corrected: str) -> int:
+    """Count approximate number of individual corrections made."""
+    matcher = difflib.SequenceMatcher(None, original.split(), corrected.split())
+    return sum(1 for op, *_ in matcher.get_opcodes() if op != 'equal')
+
+
+def highlight_diff_html(original: str, corrected: str) -> str:
+    """Character-level diff as HTML with red deletions and green insertions."""
+    matcher = difflib.SequenceMatcher(None, original, corrected, autojunk=False)
+    parts = []
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        if op == 'equal':
+            parts.append(original[i1:i2].replace('\n', '<br>'))
+        elif op == 'replace':
+            parts.append(
+                f'<del style="background:#ffd0d0;color:#a00;text-decoration:line-through;">'
+                f'{original[i1:i2].replace(chr(10), "<br>")}</del>'
+                f'<ins style="background:#d0ffd0;color:#060;text-decoration:none;font-style:normal;">'
+                f'{corrected[j1:j2].replace(chr(10), "<br>")}</ins>'
+            )
+        elif op == 'delete':
+            parts.append(
+                f'<del style="background:#ffd0d0;color:#a00;text-decoration:line-through;">'
+                f'{original[i1:i2].replace(chr(10), "<br>")}</del>'
+            )
+        elif op == 'insert':
+            parts.append(
+                f'<ins style="background:#d0ffd0;color:#060;text-decoration:none;font-style:normal;">'
+                f'{corrected[j1:j2].replace(chr(10), "<br>")}</ins>'
+            )
+    return ''.join(parts)
+
+
+# ── 한국어 배터리 용어 선치환 ─────────────────────────────────────────────────
 _KO_TERMS = [
-    ('양극 활물질',      'cathode active material'),
-    ('양극활물질',       'cathode active material'),
-    ('음극 활물질',      'anode active material'),
-    ('음극활물질',       'anode active material'),
-    ('양극재',           'cathode material'),
-    ('음극재',           'anode material'),
-    ('양극',             'cathode'),
-    ('음극',             'anode'),
-    ('전해질',           'electrolyte'),
-    ('집전체',           'current collector'),
-    ('바인더',           'binder'),
-    ('활물질',           'active material'),
-    ('초기 쿨롱 효율',   'initial Coulombic efficiency'),
-    ('쿨롱 효율',        'Coulombic efficiency'),
-    ('용량유지율',       'capacity retention'),
-    ('용량 유지율',      'capacity retention'),
-    ('율특성',           'rate capability'),
-    ('부피팽창',         'volume expansion'),
-    ('부피 팽창',        'volume expansion'),
-    ('분쇄',             'pulverization'),
-    ('전기화학적',       'electrochemical'),
-    ('고체 전해질 계면', 'solid electrolyte interphase'),
-    ('SEI막',            'SEI layer'),
-    ('SEI 막',           'SEI layer'),
+    ('양극 활물질',       'cathode active material'),
+    ('양극활물질',        'cathode active material'),
+    ('음극 활물질',       'anode active material'),
+    ('음극활물질',        'anode active material'),
+    ('양극재',            'cathode material'),
+    ('음극재',            'anode material'),
+    ('양극',              'cathode'),
+    ('음극',              'anode'),
+    ('전해질',            'electrolyte'),
+    ('집전체',            'current collector'),
+    ('바인더',            'binder'),
+    ('활물질',            'active material'),
+    ('초기 쿨롱 효율',    'initial Coulombic efficiency'),
+    ('쿨롱 효율',         'Coulombic efficiency'),
+    ('용량유지율',        'capacity retention'),
+    ('용량 유지율',       'capacity retention'),
+    ('율특성',            'rate capability'),
+    ('부피팽창',          'volume expansion'),
+    ('부피 팽창',         'volume expansion'),
+    ('분쇄',              'pulverization'),
+    ('전기화학적',        'electrochemical'),
+    ('고체 전해질 계면',  'solid electrolyte interphase'),
+    ('SEI막',             'SEI layer'),
+    ('SEI 막',            'SEI layer'),
 ]
 
 
 def is_korean(text: str) -> bool:
-    """텍스트에 한글이 10자 이상 포함돼 있으면 한국어로 판단."""
     korean_chars = sum(1 for c in text if '가' <= c <= '힣' or 'ᄀ' <= c <= 'ᇿ')
     return korean_chars >= 10
 
@@ -108,29 +191,18 @@ def preprocess_korean(text: str) -> str:
     return text
 
 
-def apply_style_rules(text: str) -> str:
-    for pattern, repl, flags in RULES:
-        text = re.sub(pattern, repl, text, flags=flags) if flags else re.sub(pattern, repl, text)
-    text = re.sub(r'  +', ' ', text)
-    return text
-
-
-def process(input_text: str) -> tuple[str, str]:
-    """
-    Returns (result_text, mode) where mode is 'translate' or 'edit'.
-    Korean input → translate + style correction.
-    English input → style correction only.
-    """
+def process(input_text: str):
+    """Returns (original_en, corrected, mode)."""
     if is_korean(input_text):
         preprocessed = preprocess_korean(input_text)
         translator = GoogleTranslator(source='ko', target='en')
         paras = [p.strip() for p in preprocessed.split('\n\n') if p.strip()]
-        result = '\n\n'.join(apply_style_rules(translator.translate(p)) for p in paras)
-        return result, 'translate'
+        translated = '\n\n'.join(translator.translate(p) for p in paras)
+        corrected = apply_style_rules(translated)
+        return translated, corrected, 'translate'
     else:
-        paras = [p.strip() for p in input_text.split('\n\n') if p.strip()]
-        result = '\n\n'.join(apply_style_rules(p) for p in paras)
-        return result, 'edit'
+        corrected = apply_style_rules(input_text)
+        return input_text, corrected, 'edit'
 
 
 # ── 첨자 패턴 ────────────────────────────────────────────────────────────────
@@ -157,7 +229,6 @@ def build_docx(text: str) -> bytes:
     style.font.name = 'Times New Roman'
     style.font.size = Pt(12)
     style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
-
     for block in text.split('\n\n'):
         if not block.strip():
             continue
@@ -166,7 +237,6 @@ def build_docx(text: str) -> bytes:
         p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
         p.paragraph_format.first_line_indent = Pt(24)
         p.paragraph_format.space_after = Pt(12)
-
         pos = 0
         for m in _SUP_SUB_PAT.finditer(block):
             if m.start() > pos:
@@ -179,7 +249,6 @@ def build_docx(text: str) -> bytes:
             pos = m.end()
         if pos < len(block):
             _run(p, block[pos:])
-
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)
@@ -204,10 +273,9 @@ st.set_page_config(page_title="배터리 논문 번역기", page_icon="🔋", la
 st.title("🔋 배터리 논문 전문 번역기")
 st.caption("한국어 → 번역 + 스타일 교정 · 영어 → 스타일 교정만 · 완전 무료")
 
-if 'result' not in st.session_state:
-    st.session_state.result = ''
-if 'mode' not in st.session_state:
-    st.session_state.mode = ''
+for key in ('original_en', 'corrected', 'mode'):
+    if key not in st.session_state:
+        st.session_state[key] = ''
 
 col_left, col_right = st.columns(2)
 
@@ -215,10 +283,9 @@ with col_left:
     user_input = st.text_area(
         "입력 (한국어 또는 영어)",
         height=500,
-        placeholder="한국어: 번역 후 스타일 교정\n영어: 스타일 교정만 적용\n\n텍스트를 붙여넣고 버튼을 누르세요.",
+        placeholder="한국어 → 번역 후 스타일 교정\n영어 → 스타일 교정만 적용\n\n텍스트를 붙여넣고 버튼을 누르세요.",
     )
 
-    # 입력 감지해서 버튼 라벨 동적으로 변경
     if user_input and is_korean(user_input):
         btn_label = "번역 + 교정하기 🇰🇷→🇺🇸"
     elif user_input:
@@ -230,32 +297,59 @@ with col_left:
         if user_input.strip():
             with st.spinner("처리 중..."):
                 try:
-                    result, mode = process(user_input)
-                    st.session_state.result = result
+                    orig, corr, mode = process(user_input)
+                    st.session_state.original_en = orig
+                    st.session_state.corrected = corr
                     st.session_state.mode = mode
                 except Exception as e:
                     st.error(f"오류: {e}")
 
 with col_right:
-    if st.session_state.result:
-        # 모드 뱃지
-        if st.session_state.mode == 'translate':
-            st.success("번역 완료 (한국어 → 영어 + 스타일 교정)")
+    if st.session_state.corrected:
+        orig = st.session_state.original_en
+        corr = st.session_state.corrected
+        mode = st.session_state.mode
+        n_corrections = count_corrections(orig, corr)
+
+        if mode == 'translate':
+            st.success(f"번역 완료 · 스타일 교정 {n_corrections}건")
         else:
-            st.info("교정 완료 (영어 스타일 교정)")
+            if n_corrections == 0:
+                st.warning("교정 사항 없음 — 이미 논문 스타일에 맞는 표현입니다.")
+            else:
+                st.success(f"교정 완료 · {n_corrections}건 수정")
 
         st.download_button(
-            "📥 Word 다운로드 (12pt, 양쪽맞춤, 2칸 들여쓰기)",
-            data=build_docx(st.session_state.result),
+            "📥 Word 다운로드",
+            data=build_docx(corr),
             file_name="paper_output.docx",
             use_container_width=True,
         )
-        st.markdown(
-            f'<div style="font-family:serif; font-size:1.1rem; text-align:justify; '
-            f'line-height:2.0; padding:20px; background-color:#f9f9f9; border-radius:10px;">'
-            f'{web_display_format(st.session_state.result).replace(chr(10), "<br>")}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+
+        # 영어 교정 모드: diff 탭 / 결과만 탭 분리
+        if mode == 'edit' and n_corrections > 0:
+            tab_diff, tab_clean = st.tabs(["🔍 변경사항 표시", "📄 교정본만 보기"])
+            with tab_diff:
+                diff_html = highlight_diff_html(orig, corr)
+                st.markdown(
+                    f'<div style="font-family:serif;font-size:1.05rem;line-height:2.0;'
+                    f'padding:20px;background:#fafafa;border-radius:10px;">'
+                    f'{diff_html}</div>',
+                    unsafe_allow_html=True,
+                )
+            with tab_clean:
+                st.markdown(
+                    f'<div style="font-family:serif;font-size:1.05rem;text-align:justify;'
+                    f'line-height:2.0;padding:20px;background:#fafafa;border-radius:10px;">'
+                    f'{web_display_format(corr).replace(chr(10), "<br>")}</div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown(
+                f'<div style="font-family:serif;font-size:1.05rem;text-align:justify;'
+                f'line-height:2.0;padding:20px;background:#fafafa;border-radius:10px;">'
+                f'{web_display_format(corr).replace(chr(10), "<br>")}</div>',
+                unsafe_allow_html=True,
+            )
     else:
         st.info("결과가 여기에 표시됩니다.")
