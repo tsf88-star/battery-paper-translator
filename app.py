@@ -65,7 +65,63 @@ RULES = [
 
     # ── Herein / In this work (intro contribution marker)
     (r'\bIn this paper,\b',  'In this work,', 0),
+
+    # ── Colloquial / non-academic phrases → formal equivalents
+    (r'\bthanks to\b',              'Owing to',           re.IGNORECASE),
+    (r'\bAs a result of this\b',    'Consequently',       re.IGNORECASE),
+    (r'\bIn addition to this,\b',   'Furthermore,',       re.IGNORECASE),
+    (r'\bSo,\b',                    'Therefore,',         0),
+    (r'\bso,\b',                    'therefore,',         0),
+    (r'\bgot\b',                    'obtained',           re.IGNORECASE),
+    (r'\bgets\b',                   'is obtained',        re.IGNORECASE),
 ]
+
+
+# ── Serial-predicate splitter ─────────────────────────────────────────────────
+# Detects "Subj V1 O1, V2 O2, and V3 O3." and converts to
+# "Subj V1 O1 and V2 O2. It also V3 O3."
+# Only fires when both the comma-preceding clause and the "and" clause
+# start with an academic action verb.
+
+_AV = (
+    r'(?:(?:effectively|significantly|greatly|markedly|substantially|'
+    r'considerably|directly|largely|successfully)\s+)?'
+    r'(?:suppress|accommodate|alleviate|improve|enhance|reduce|increase|'
+    r'provide|enable|prevent|facilitate|allow|promote|inhibit|maintain|'
+    r'retain|achieve|generate|produce|form|stabilize|strengthen|mitigate|'
+    r'minimize|maximize|demonstrate|exhibit|show|offer|deliver|create|'
+    r'modify|restrict|extend|limit|accelerate|buffer|absorb|distribute|'
+    r'transfer|conduct|store|release|trap|anchor|bind|coat|protect|'
+    r'diffuse|migrate|deposit|dissolve|expand|contract|crack|fracture|'
+    r'initiate|propagate|intercalate|grow|shrink|contribute|lead|'
+    r'affect|influence|control|determine|govern|activate|deactivate|'
+    r'degrade|boost|lower|raise|elevate|eliminate|induce|trigger|'
+    r'decrease|prevent|promote)[a-z]*'
+)
+_AND_VERB = re.compile(r',\s+and\s+(' + _AV + r')(.*?)([.!?])$', re.IGNORECASE)
+_COMMA_VERB = re.compile(_AV, re.IGNORECASE)
+
+
+def _fix_triple_predicate(sent: str) -> str:
+    m = _AND_VERB.search(sent)
+    if not m:
+        return sent
+    before_and = sent[:m.start()]
+    last_comma = before_and.rfind(',')
+    if last_comma < 0:
+        return sent
+    after_last_comma = before_and[last_comma + 1:].lstrip()
+    if not _COMMA_VERB.match(after_last_comma):
+        return sent
+    first_part = before_and[:last_comma] + ' and ' + after_last_comma
+    third_clause = m.group(1) + m.group(2)
+    end = m.group(3)
+    return first_part.rstrip() + end + ' It also ' + third_clause.strip() + end
+
+
+def fix_serial_predicates(text: str) -> str:
+    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
+    return ' '.join(_fix_triple_predicate(s) for s in sentences)
 
 
 def apply_style_rules(text: str) -> str:
@@ -74,8 +130,8 @@ def apply_style_rules(text: str) -> str:
             text = re.sub(pattern, repl, text, flags=flags)
         else:
             text = re.sub(pattern, repl, text)
-    # Clean up double spaces left by removals
     text = re.sub(r'  +', ' ', text)
+    text = fix_serial_predicates(text)
     return text
 
 
