@@ -1,7 +1,10 @@
 import re
 from datetime import datetime
+from io import BytesIO
 import streamlit as st
 from deep_translator import GoogleTranslator
+from docx import Document
+from docx.shared import Pt
 
 # ── Post-processing rules derived from corpus analysis (style_guide.txt) ─────
 # Each tuple: (regex_pattern, replacement, re_flags)
@@ -195,6 +198,46 @@ def translate(korean_text: str) -> str:
     return '\n\n'.join(translated_parts)
 
 
+# ── Word export with superscript formatting ───────────────────────────────────
+# Detects two superscript patterns:
+#   1) Citation numbers right after sentence-end punctuation: "conditions.1, 2"
+#   2) Unit exponents after a letter: "g–1", "cm–2", "mA g–1"
+_SUP_PAT = re.compile(
+    r'(?<=[.!?])(\d+(?:[,\s\-–−]\s*\d+)*)'  # citations: ".1, 2" or ".9-11"
+    r'|(?<=[A-Za-z])([-–−]\d+)',              # exponents: "g–1", "cm–2"
+)
+
+
+def build_docx(text: str) -> bytes:
+    doc = Document()
+    for block in text.split('\n\n'):
+        block = block.strip().replace('\n', ' ')
+        if not block:
+            continue
+        p = doc.add_paragraph()
+        pos = 0
+        for m in _SUP_PAT.finditer(block):
+            if m.start() > pos:
+                _run(p, block[pos:m.start()])
+            _run(p, m.group(), superscript=True)
+            pos = m.end()
+        if pos < len(block):
+            _run(p, block[pos:])
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _run(paragraph, text, superscript=False):
+    run = paragraph.add_run(text)
+    run.font.name = 'Times New Roman'
+    run.font.size = Pt(11)
+    if superscript:
+        run.font.superscript = True
+    return run
+
+
 # ── Streamlit UI ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="맞춤형 논문 번역기 (무료)",
@@ -247,6 +290,13 @@ with col_right:
                     st.error(f"번역 오류: {e}")
 
     if st.session_state.translation:
+        st.download_button(
+            "Word 파일 다운로드 (.docx)",
+            data=build_docx(st.session_state.translation),
+            file_name="translated_paper.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+        )
         st.markdown(st.session_state.translation)
     elif not clicked:
         st.info("왼쪽에 한국어 텍스트를 입력하고 '번역 →' 버튼을 누르세요.")
