@@ -75,7 +75,38 @@ RULES = [
     (r'\bso,\b',                    'therefore,',         0),
     (r'\bgot\b',                    'obtained',           re.IGNORECASE),
     (r'\bgets\b',                   'is obtained',        re.IGNORECASE),
+
+    # ── Academic register (corpus frequency preference)
+    (r'\busually\b',                'typically',               re.IGNORECASE),
+    (r'\bmainstream\b',             'predominant',             re.IGNORECASE),
+    (r'\btakes advantage of\b',     'leverages',               re.IGNORECASE),
+    (r'\bunder realistic\b',        'under practical',         re.IGNORECASE),
+    (r'\bfundamentally limits\b',   'fundamentally constrains', re.IGNORECASE),
+
+    # ── Battery / materials science technical terms
+    (r'\bfast-charging performance\b', 'fast-charging capability', re.IGNORECASE),
+    (r'\bfast charging\b',          'fast-charging',           re.IGNORECASE),
+    (r'\binherent problems\b',      'intrinsic challenges',    re.IGNORECASE),
+    (r'\blow cycle life\b',         'poor cyclability',        re.IGNORECASE),
+    (r'\bshort cycle life\b',       'limited cyclability',     re.IGNORECASE),
+    (r'\blong lifespan\b',          'long cycle life',         re.IGNORECASE),
+    (r'\blong service life\b',      'long cycle life',         re.IGNORECASE),
+    (r'\bstructural stability\b',   'structural integrity',    re.IGNORECASE),
+    (r'\bpoor conductivity\b',      'low electrical conductivity', re.IGNORECASE),
+    (r'\belectrical resistance\b',  'internal resistance',     re.IGNORECASE),
 ]
+
+
+# ── Compound-modifier hyphenation ("Si based" → "Si-based") ──────────────────
+# Skips predicative forms: "is based on", "are based on", etc.
+_SKIP_BASED = frozenset({'is', 'are', 'was', 'were', 'be', 'being', 'been', 'not'})
+
+
+def fix_hyphenation(text: str) -> str:
+    def _repl(m):
+        word = m.group(1)
+        return m.group(0) if word.lower() in _SKIP_BASED else f'{word}-based'
+    return re.sub(r'\b(\w+)\s+based(?!\s+on)\b', _repl, text, flags=re.IGNORECASE)
 
 
 # ── Serial-predicate splitter ─────────────────────────────────────────────────
@@ -132,6 +163,7 @@ def apply_style_rules(text: str) -> str:
         else:
             text = re.sub(pattern, repl, text)
     text = re.sub(r'  +', ' ', text)
+    text = fix_hyphenation(text)
     text = fix_serial_predicates(text)
     return text
 
