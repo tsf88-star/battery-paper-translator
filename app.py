@@ -250,13 +250,37 @@ def process(input_text: str):
         return input_text, corrected, 'edit'
 
 
-# ── 첨자 패턴 ────────────────────────────────────────────────────────────────
+# ── 첨자 패턴 (6그룹) ────────────────────────────────────────────────────────
+# G1 : 인용번호  ".1,2"  ".9-11"              → 윗첨자
+# G2 : 단위 지수  "g-1"  "cm-2"               → 윗첨자  (글자 뒤 dash+숫자)
+# G3 : Li+                                    → Li⁺  (전용)
+# G4 : 부호만, 글자 뒤  "Na+"  "Cl-"  "COO-" → 윗첨자
+# G5 : 이온 전하, 숫자 뒤  "-SO3-" trailing  → 윗첨자  (CO2-based는 제외)
+# G6 : 화학식 아랫첨자  "TiO2"  "SO3"         → 아랫첨자
+#
+# 순서 보장: G2(글자→dash+숫자)가 G6(글자→숫자)보다 먼저라 "g-1"은 윗첨자로 처리됨.
+# G5(숫자→부호) lookahead로 "CO2-based" 오탐 방지.
 _SUP_SUB_PAT = re.compile(
-    r'(?<=[.!?])(\d+(?:[,\s\-–−]\s*\d+)*)'
-    r'|(?<=[A-Za-z])([-–−]\d+)'
-    r'|(Li\+)'
-    r'|(?<=[A-Za-z])(\d+)'
+    r'(?<=[.!?])(\d+(?:[,\s\-–−]\s*\d+)*)'           # G1 citations
+    r'|(?<=[A-Za-z])([-–−]\d+)'                       # G2 unit exponent: g-1
+    r'|(Li\+)'                                         # G3 Li+
+    r'|(?<=[A-Za-z])([+\-−])(?=[^A-Za-z0-9]|$)'      # G4 sign after letter: Na+, Cl-
+    r'|(?<=\d)([+\-−])(?![A-Za-z0-9])'               # G5 charge after digit: SO3-
+    r'|(?<=[A-Za-z])(\d+)'                             # G6 subscript: TiO2, SO3
 )
+
+# 작용기 prefix 하이픈 → en dash: "-SO3-" "COO-" 앞 "-" 등
+# 글자/숫자가 아닌 것 뒤에서 대문자+글자/숫자가 오는 경우만 변환
+_PREFIX_DASH = re.compile(r'(?<![A-Za-z0-9])-(?=[A-Z][A-Za-z0-9])')
+
+
+def _to_sup(s: str) -> str:
+    table = {'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵',
+             '6':'⁶','7':'⁷','8':'⁸','9':'⁹',
+             '+':'⁺','-':'⁻','–':'⁻','−':'⁻'}
+    return ''.join(table.get(c, c) for c in s)
+
+_SUB_MAP = str.maketrans('0123456789', '₀₁₂₃₄₅₆₇₈₉')
 
 
 def _run(paragraph, text, sup=False, sub=False):
@@ -268,6 +292,25 @@ def _run(paragraph, text, sup=False, sub=False):
     return run
 
 
+def _apply_sup_sub_docx(p, block: str):
+    """첨자 패턴을 찾아 Word run으로 분리 삽입."""
+    pos = 0
+    for m in _SUP_SUB_PAT.finditer(block):
+        if m.start() > pos:
+            _run(p, block[pos:m.start()])
+        g1, g2, g3, g4, g5, g6 = m.groups()
+        dash = lambda s: s.replace('-', '–').replace('−', '–')
+        if g1:   _run(p, g1, sup=True)
+        elif g2: _run(p, dash(g2), sup=True)
+        elif g3: _run(p, 'Li'); _run(p, '+', sup=True)
+        elif g4: _run(p, dash(g4), sup=True)
+        elif g5: _run(p, dash(g5), sup=True)
+        elif g6: _run(p, g6, sub=True)
+        pos = m.end()
+    if pos < len(block):
+        _run(p, block[pos:])
+
+
 def build_docx(text: str) -> bytes:
     doc = Document()
     style = doc.styles['Normal']
@@ -277,23 +320,13 @@ def build_docx(text: str) -> bytes:
     for block in text.split('\n\n'):
         if not block.strip():
             continue
+        block = _PREFIX_DASH.sub('–', block)   # "-SO3-" prefix → en dash
         p = doc.add_paragraph()
         p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
         p.paragraph_format.first_line_indent = Pt(24)
         p.paragraph_format.space_after = Pt(12)
-        pos = 0
-        for m in _SUP_SUB_PAT.finditer(block):
-            if m.start() > pos:
-                _run(p, block[pos:m.start()])
-            m1, m2, m3, m4 = m.groups()
-            if m1:   _run(p, m1, sup=True)
-            elif m2: _run(p, m2.replace('-', '–').replace('−', '–'), sup=True)
-            elif m3: _run(p, 'Li'); _run(p, '+', sup=True)
-            elif m4: _run(p, m4, sub=True)
-            pos = m.end()
-        if pos < len(block):
-            _run(p, block[pos:])
+        _apply_sup_sub_docx(p, block)
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)
@@ -301,15 +334,18 @@ def build_docx(text: str) -> bytes:
 
 
 def web_display_format(text: str) -> str:
-    sup_map = str.maketrans('0123456789+-–−', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁻')
-    sub_map = str.maketrans('0123456789', '₀₁₂₃₄₅₆₇₈₉')
+    text = _PREFIX_DASH.sub('–', text)   # "-SO3-" prefix → en dash
+
     def _repl(m):
-        m1, m2, m3, m4 = m.groups()
-        if m1: return m1.translate(sup_map)
-        if m2: return m2.replace('-', '–').replace('−', '–').translate(sup_map)
-        if m3: return 'Li⁺'
-        if m4: return m4.translate(sub_map)
+        g1, g2, g3, g4, g5, g6 = m.groups()
+        if g1: return _to_sup(g1)
+        if g2: return _to_sup(g2)
+        if g3: return 'Li⁺'
+        if g4: return _to_sup(g4)
+        if g5: return _to_sup(g5)
+        if g6: return g6.translate(_SUB_MAP)
         return m.group()
+
     return _SUP_SUB_PAT.sub(_repl, text)
 
 
