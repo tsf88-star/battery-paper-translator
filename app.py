@@ -187,9 +187,44 @@ def chunk_text(text: str, max_len: int = 4500) -> list:
     return chunks or [text]
 
 
+# ── Korean term pre-processing ────────────────────────────────────────────────
+# Replace Korean battery terms directly before Google Translate so domain
+# terms are never mistranslated (e.g. 양극 → "positive electrode" → cathode).
+# Listed longest-match first to avoid partial replacements.
+_KO_TERMS = [
+    ('양극재',      'cathode material'),
+    ('양극 활물질',  'cathode active material'),
+    ('양극활물질',   'cathode active material'),
+    ('음극재',      'anode material'),
+    ('음극 활물질',  'anode active material'),
+    ('음극활물질',   'anode active material'),
+    ('양극',        'cathode'),
+    ('음극',        'anode'),
+    ('전해질',      'electrolyte'),
+    ('집전체',      'current collector'),
+    ('바인더',      'binder'),
+    ('활물질',      'active material'),
+    ('용량유지율',   'capacity retention'),
+    ('용량',        'capacity'),
+    ('초기 쿨롱 효율', 'initial Coulombic efficiency'),
+    ('쿨롱 효율',   'Coulombic efficiency'),
+    ('율특성',      'rate capability'),
+    ('부피팽창',    'volume expansion'),
+    ('분쇄',        'pulverization'),
+    ('전기화학적',   'electrochemical'),
+]
+
+
+def preprocess_korean(text: str) -> str:
+    for ko, en in _KO_TERMS:
+        text = text.replace(ko, en)
+    return text
+
+
 def translate(korean_text: str) -> str:
+    preprocessed = preprocess_korean(korean_text)
     translator = GoogleTranslator(source='ko', target='en')
-    chunks = chunk_text(korean_text)
+    chunks = chunk_text(preprocessed)
     translated_parts = []
     for chunk in chunks:
         raw = translator.translate(chunk)
