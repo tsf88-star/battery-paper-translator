@@ -331,14 +331,7 @@ with col_left:
         placeholder="한국어 → 번역 후 스타일 교정\n영어 → 스타일 교정만 적용\n\n텍스트를 붙여넣고 버튼을 누르세요.",
     )
 
-    if user_input and is_korean(user_input):
-        btn_label = "번역 + 교정하기 🇰🇷→🇺🇸"
-    elif user_input:
-        btn_label = "영어 교정하기 ✏️"
-    else:
-        btn_label = "번역 / 교정하기"
-
-    if st.button(btn_label, type="primary", use_container_width=True):
+    if st.button("번역 / 교정하기", type="primary", use_container_width=True):
         if user_input.strip():
             with st.spinner("처리 중..."):
                 try:
