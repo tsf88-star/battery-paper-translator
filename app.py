@@ -5,7 +5,7 @@ import streamlit as st
 from deep_translator import GoogleTranslator
 from docx import Document
 from docx.shared import Pt, Cm
-from docx.enum.text import WD_LINE_SPACING
+from docx.enum.text import WD_LINE_SPACING, WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 
 # ── 스타일 및 번역 규칙 ───────────────────────────────────────────────────────
@@ -67,16 +67,19 @@ def build_docx(text: str) -> bytes:
         if not block.strip(): continue
         p = doc.add_paragraph()
         
-        # 단락 설정: 줄간격 2.0 (Double), 첫 줄 들여쓰기 1.27cm (0.5 inch), 단락 후 간격 12pt
+        # 1. 양쪽 맞춤 (Justify)
+        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        # 2. 줄간격 2.0 (Double)
         p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
-        p.paragraph_format.first_line_indent = Cm(1.27)
+        # 3. 첫 줄 들여쓰기: 12pt 글자 기준 2글자 = 24pt
+        p.paragraph_format.first_line_indent = Pt(24)
+        # 4. 단락 후 간격
         p.paragraph_format.space_after = Pt(12)
         
         pos = 0
         for m in _SUP_SUB_PAT.finditer(block):
             if m.start() > pos:
                 _run(p, block[pos:m.start()])
-            
             m1, m2, m3, m4 = m.groups()
             if m1: _run(p, m1, sup=True)
             elif m2: _run(p, m2.replace('-', '–').replace('−', '–'), sup=True)
@@ -130,11 +133,11 @@ with col_left:
 
 with col_right:
     if st.session_state.translation:
-        st.download_button("📥 Word 다운로드 (12pt, Double Spacing)", 
+        st.download_button("📥 Word 다운로드 (12pt, 양쪽맞춤, 2글자들여쓰기)", 
                            data=build_docx(st.session_state.translation), 
                            file_name="translated_paper.docx",
                            use_container_width=True)
-        st.markdown(f'<div style="font-family:serif; font-size:1.2rem; line-height:2.0; padding:20px; background-color:#f9f9f9; border-radius:10px;">'
+        st.markdown(f'<div style="font-family:serif; font-size:1.2rem; text-align:justify; line-height:2.0; padding:20px; background-color:#f9f9f9; border-radius:10px;">'
                     f'{web_display_format(st.session_state.translation).replace("\n", "<br>")}'
                     f'</div>', unsafe_allow_html=True)
     else:
