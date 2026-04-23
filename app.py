@@ -364,29 +364,29 @@ with col_right:
             use_container_width=True,
         )
 
+        _CARD = ('font-family:serif;font-size:1.05rem;line-height:2.0;'
+                 'padding:20px;background:#fafafa;border-radius:10px;')
+
         # 영어 교정 모드: diff 탭 / 결과만 탭 분리
         if mode == 'edit' and n_corrections > 0:
+            # 첨자 변환을 먼저 적용한 뒤 diff 계산 → 양쪽 모두 올바른 첨자 표시
+            orig_fmt = web_display_format(orig).replace(chr(10), '<br>')
+            corr_fmt = web_display_format(corr).replace(chr(10), '<br>')
             tab_diff, tab_clean = st.tabs(["🔍 변경사항 표시", "📄 교정본만 보기"])
             with tab_diff:
-                diff_html = highlight_diff_html(orig, corr)
                 st.markdown(
-                    f'<div style="font-family:serif;font-size:1.05rem;line-height:2.0;'
-                    f'padding:20px;background:#fafafa;border-radius:10px;">'
-                    f'{diff_html}</div>',
+                    f'<div style="{_CARD}">{highlight_diff_html(orig_fmt, corr_fmt)}</div>',
                     unsafe_allow_html=True,
                 )
             with tab_clean:
                 st.markdown(
-                    f'<div style="font-family:serif;font-size:1.05rem;text-align:justify;'
-                    f'line-height:2.0;padding:20px;background:#fafafa;border-radius:10px;">'
-                    f'{web_display_format(corr).replace(chr(10), "<br>")}</div>',
+                    f'<div style="{_CARD}text-align:justify;">{corr_fmt}</div>',
                     unsafe_allow_html=True,
                 )
         else:
+            corr_fmt = web_display_format(corr).replace(chr(10), '<br>')
             st.markdown(
-                f'<div style="font-family:serif;font-size:1.05rem;text-align:justify;'
-                f'line-height:2.0;padding:20px;background:#fafafa;border-radius:10px;">'
-                f'{web_display_format(corr).replace(chr(10), "<br>")}</div>',
+                f'<div style="{_CARD}text-align:justify;">{corr_fmt}</div>',
                 unsafe_allow_html=True,
             )
     else:
