@@ -1,287 +1,116 @@
 import re
-import difflib
+from datetime import datetime
 from io import BytesIO
 import streamlit as st
 from deep_translator import GoogleTranslator
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Cm
 from docx.enum.text import WD_LINE_SPACING, WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 
-# ── 스타일 교정 규칙 ──────────────────────────────────────────────────────────
+# ── [고강도] GPT 냄새 제거 및 배터리 논문 스타일 교정 규칙 ──────────────────────
+# 스타일 파일(merged_corpus)과 교수님 피드백을 반영한 강제 치환 목록
 RULES = [
-    # ── Degradation vocabulary (degrade >> deteriorate >> decay >> fade)
-    (r'\bdeterioration\b',          'degradation',                  re.IGNORECASE),
-    (r'\bdeteriorates\b',           'degrades',                     re.IGNORECASE),
-    (r'\bdeteriorated\b',           'degraded',                     re.IGNORECASE),
-    (r'\bdeteriorating\b',          'degrading',                    re.IGNORECASE),
-    (r'\bdeteriorate\b',            'degrade',                      re.IGNORECASE),
-    (r'\bdecayed\b',                'degraded',                     re.IGNORECASE),
-    (r'\bdecays\b',                 'degrades',                     re.IGNORECASE),
-    (r'\bdecay\b(?!\s+rate)',        'degrade',                      re.IGNORECASE),
-    (r'\bfaded\b(?=.*capacity)',     'degraded',                     re.IGNORECASE),
-    # ── Capitalization
-    (r'\binitial coulombic efficiency\b', 'initial Coulombic efficiency', re.IGNORECASE),
-    (r'\bcoulombic efficiency\b',    'Coulombic efficiency',         re.IGNORECASE),
-    # ── Technical terms
-    (r'\bcapacity maintenance\b',    'capacity retention',           re.IGNORECASE),
-    (r'\bcapacity keeping\b',        'capacity retention',           re.IGNORECASE),
-    (r'\bcapacity preservation\b',   'capacity retention',           re.IGNORECASE),
-    (r'\bcycling performance\b',     'cycling stability',            re.IGNORECASE),
-    (r'\bcycle performance\b',       'cycling stability',            re.IGNORECASE),
-    (r'\bcycle stability\b',         'cycling stability',            re.IGNORECASE),
-    (r'\brate performance\b',        'rate capability',              re.IGNORECASE),
-    (r'\bnegative electrode\b',      'anode',                        re.IGNORECASE),
-    (r'\bpositive electrode\b',      'cathode',                      re.IGNORECASE),
-    (r'\bsolid electrolyte interface\b', 'solid electrolyte interphase', re.IGNORECASE),
-    (r'\bSEI interface\b',           'SEI layer',                    0),
-    (r'\bvolumetric swelling\b',     'volume expansion',             re.IGNORECASE),
-    (r'\bvolumetric expansion\b',    'volume expansion',             re.IGNORECASE),
-    (r'\bparticle pulverization\b',  'pulverization',                re.IGNORECASE),
-    (r'\bparticle cracking\b',       'cracking',                     re.IGNORECASE),
-    (r'\bparticle fragmentation\b',  'pulverization',                re.IGNORECASE),
-    (r'\bstructural stability\b',    'structural integrity',         re.IGNORECASE),
-    (r'\blow cycle life\b',          'poor cyclability',             re.IGNORECASE),
-    (r'\bshort cycle life\b',        'limited cyclability',          re.IGNORECASE),
-    (r'\blong lifespan\b',           'long cycle life',              re.IGNORECASE),
-    (r'\bpoor conductivity\b',       'low electrical conductivity',  re.IGNORECASE),
-    (r'\bfast charging\b',           'fast-charging',                re.IGNORECASE),
-    (r'\bSi based\b',                'Si-based',                     0),
-    (r'\bcarbon based\b',            'carbon-based',                 re.IGNORECASE),
-    (r'\bgraphene based\b',          'graphene-based',               re.IGNORECASE),
-    # ── Verb preferences
-    (r'\bdemonstrates a\b',          'shows a',                      re.IGNORECASE),
-    (r'\bdemonstrated a\b',          'showed a',                     re.IGNORECASE),
-    (r'\bpresents a\b',              'exhibits a',                   re.IGNORECASE),
-    # ── Causal attribution
-    (r'\bis due to\b',               'is attributed to',             re.IGNORECASE),
-    (r'\bare due to\b',              'are attributed to',            re.IGNORECASE),
-    (r'\bresulted from\b',           'arose from',                   re.IGNORECASE),
-    # ── Figure formatting
-    (r'\bfig\.\s*(\d)',              r'Figure \1',                   0),
-    (r'\bfig\s+(\d)',                r'Figure \1',                   0),
-    # ── Introduction / Conclusion markers (Rules 3 & 4)
-    (r'\bIn this paper,',            'In this work,',                0),
-    (r'\bin this paper,',            'in this work,',                0),
-    (r'\bIn conclusion,',            'In summary,',                  0),
-    (r'\bIn conclusions,',           'In summary,',                  0),
-    (r'(?m)^But\b',                  'However,',                     0),
-    (r'(?<=[.!?] )But\b',            'However,',                     0),
-    # ── Self-reference: "the authors" → "we"
-    (r'\bthe authors\b',             'we',                           re.IGNORECASE),
-    (r'\bthe present authors\b',     'we',                           re.IGNORECASE),
-    (r'\bthe present study\b',       'this work',                    re.IGNORECASE),
-    # ── Contractions (Rule 10 – no contractions in formal writing)
-    (r"\bit's\b",                    'it is',                        re.IGNORECASE),
-    (r"\bdon't\b",                   'do not',                       re.IGNORECASE),
-    (r"\bcan't\b",                   'cannot',                       re.IGNORECASE),
-    (r"\bisn't\b",                   'is not',                       re.IGNORECASE),
-    (r"\bwasn't\b",                  'was not',                      re.IGNORECASE),
-    (r"\baren't\b",                  'are not',                      re.IGNORECASE),
-    (r"\bweren't\b",                 'were not',                     re.IGNORECASE),
-    (r"\bwon't\b",                   'will not',                     re.IGNORECASE),
-    (r"\bdidn't\b",                  'did not',                      re.IGNORECASE),
-    (r"\bhasn't\b",                  'has not',                      re.IGNORECASE),
-    (r"\bhaven't\b",                 'have not',                     re.IGNORECASE),
-    (r"\bdoesn't\b",                 'does not',                     re.IGNORECASE),
-    # ── Informal / weak words (Rule 10)
-    (r'\ba lot of\b',                'significant',                  re.IGNORECASE),
-    (r'\blots of\b',                 'numerous',                     re.IGNORECASE),
-    (r'\bthanks to\b',               'owing to',                     re.IGNORECASE),
-    (r'\bSo,\b',                     'Therefore,',                   0),
-    (r'\bso,\b',                     'therefore,',                   0),
-    (r'\bgot\b',                     'obtained',                     re.IGNORECASE),
-    (r'\busually\b',                 'typically',                    re.IGNORECASE),
-    (r'\bvery significantly\b',      'significantly',                re.IGNORECASE),
-    (r'\bquite\b',                   '',                             re.IGNORECASE),
-    (r'\breally\b',                  '',                             re.IGNORECASE),
-    (r'\bvery high\b',               'significantly high',           re.IGNORECASE),
-    (r'\bvery low\b',                'significantly low',            re.IGNORECASE),
-    (r'\bvery large\b',              'substantially large',          re.IGNORECASE),
-    (r'\bvery small\b',              'considerably small',           re.IGNORECASE),
-    (r'\bvery fast\b',               'markedly fast',                re.IGNORECASE),
-    (r'\bvery stable\b',             'highly stable',                re.IGNORECASE),
-    (r'\bvery good\b',               'excellent',                    re.IGNORECASE),
-    # ── Register / formality
-    (r'\bAs a result of this\b',     'Consequently',                 re.IGNORECASE),
-    (r'\bIn addition to this,\b',    'Furthermore,',                 re.IGNORECASE),
-    (r'\btakes advantage of\b',      'leverages',                    re.IGNORECASE),
-    (r'\binherent problems\b',       'intrinsic challenges',         re.IGNORECASE),
-    (r'\bmainstream\b',              'predominant',                  re.IGNORECASE),
+    # 1. GPT 특유의 화려한 미사여구 제거 (Battery Paper Style로 교체)
+    (r'\bunprecedented demands\b', 'stringent requirements', re.IGNORECASE),
+    (r'\bremarkable capacity\b', 'outstanding specific capacity', re.IGNORECASE),
+    (r'\bplaced unprecedented demands on\b', 'imposed stringent requirements on', re.IGNORECASE),
+    (r'\bpaving the way for\b', 'providing a pathway for', re.IGNORECASE),
+    (r'\bundermines its practical deployment\b', 'limits its practical viability', re.IGNORECASE),
+    (r'\bculminating in\b', 'resulting in', re.IGNORECASE),
+    (r'\bunderscore the need\b', 'highlight the necessity', re.IGNORECASE),
+    (r'\bAt a loading of only\b', 'With a trace loading of', re.IGNORECASE),
+    (r'\bdisproportionate set of\b', 'significant', re.IGNORECASE),
+    
+    # 2. 교수님 절대 선호 어휘 (degrade, exhibit, attribute)
+    (r'\bfading\b', 'degradation', re.IGNORECASE), # capacity fading -> capacity degradation
+    (r'\bdeteriorat\w*\b', 'degrad', re.IGNORECASE),
+    (r'\bdecay\w*\b', 'degrad', re.IGNORECASE),
+    (r'\bfad(e|es|ed|ing)\b', 'degrad$1', re.IGNORECASE),
+    (r'\bdemonstrate(s|d)?\b', 'exhibit$1', re.IGNORECASE),
+    (r'\bshow(s|ed)?\b', 'exhibit$1', re.IGNORECASE),
+    (r'\brepresent(s|ed)?\b', 'act$1 as', re.IGNORECASE),
+    
+    # 3. 인과관계 및 원인 귀속 (is attributed to)
+    (r'\b(?:is|are) due to\b', 'is attributed to', re.IGNORECASE),
+    (r'\b(?:is|are) caused by\b', 'is attributed to', re.IGNORECASE),
+    (r'\bowing to\b', 'attributed to', re.IGNORECASE),
+    (r'\bthanks to\b', 'owing to', re.IGNORECASE),
+    (r'\bgive(s)? rise to\b', 'lead$1 to', re.IGNORECASE),
+    
+    # 4. 성능 관련 (enhance 선호)
+    (r'\bimprove(s|d)?\b', 'enhance$1', re.IGNORECASE),
+    (r'\bboost(s|ed)?\b', 'enhance$1', re.IGNORECASE),
+    
+    # 5. 문장 연결 및 접속사 (학술적 권장)
+    (r'\bYet\b', 'However,', re.IGNORECASE),
+    (r'\bAlso,\b', 'Furthermore,', 0),
+    (r'\bBut,\b', 'However,', 0),
+    (r'\bIn this paper\b', 'In this work', re.IGNORECASE),
+    (r'\bfig\.\b', 'Figure', re.IGNORECASE),
+    
+    # 6. 배터리 전문 용어
+    (r'\bnegative electrode\b', 'anode', re.IGNORECASE),
+    (r'\bpositive electrode\b', 'cathode', re.IGNORECASE),
+    (r'\bcoulombic efficiency\b', 'Coulombic efficiency', 0),
+    (r'\bice\b(?=\s+is)', 'initial Coulombic efficiency (ICE)', re.IGNORECASE),
 ]
 
-
-# ── Serial-predicate splitter ─────────────────────────────────────────────────
-# "X suppresses A, improves B, and enhances C." →
-# "X suppresses A and improves B. It also enhances C."
-_AV = (
-    r'(?:(?:effectively|significantly|greatly|markedly|substantially|'
-    r'considerably|directly|largely|successfully)\s+)?'
-    r'(?:suppress|accommodate|alleviate|improve|enhance|reduce|increase|'
-    r'provide|enable|prevent|facilitate|allow|promote|inhibit|maintain|'
-    r'retain|achieve|generate|produce|form|stabilize|strengthen|mitigate|'
-    r'minimize|maximize|demonstrate|exhibit|show|offer|deliver|create|'
-    r'modify|restrict|extend|limit|accelerate|buffer|absorb|distribute|'
-    r'transfer|conduct|store|release|trap|anchor|bind|coat|protect|'
-    r'diffuse|migrate|deposit|dissolve|expand|contract|crack|fracture|'
-    r'initiate|propagate|intercalate|grow|shrink|contribute|lead|'
-    r'affect|influence|control|determine|govern|activate|deactivate|'
-    r'degrade|boost|lower|raise|elevate|eliminate|induce|trigger|'
-    r'decrease|promote)[a-z]*'
-)
-_AND_VERB = re.compile(r',\s+and\s+(' + _AV + r')(.*?)([.!?])$', re.IGNORECASE)
-_COMMA_VERB = re.compile(_AV, re.IGNORECASE)
-
-
-def _fix_triple_predicate(sent: str) -> str:
-    m = _AND_VERB.search(sent)
-    if not m:
-        return sent
-    before_and = sent[:m.start()]
-    last_comma = before_and.rfind(',')
-    if last_comma < 0:
-        return sent
-    after_last_comma = before_and[last_comma + 1:].lstrip()
-    if not _COMMA_VERB.match(after_last_comma):
-        return sent
-    first_part = before_and[:last_comma] + ' and ' + after_last_comma
-    third_clause = m.group(1) + m.group(2)
-    end = m.group(3)
-    return first_part.rstrip() + end + ' It also ' + third_clause.strip() + end
-
-
-def fix_serial_predicates(text: str) -> str:
-    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
-    return ' '.join(_fix_triple_predicate(s) for s in sentences)
-
-
-def apply_style_rules(text: str) -> str:
+def apply_academic_refinement(text: str) -> str:
+    # 1. 고강도 규칙 적용
     for pattern, repl, flags in RULES:
         text = re.sub(pattern, repl, text, flags=flags) if flags else re.sub(pattern, repl, text)
+    
+    # 2. Si-based 등 하이픈 자동 교정
+    text = re.sub(r'\b(\w+)\s+based(?!\s+on)\b', r'\1-based', text, flags=re.IGNORECASE)
+    
+    # 3. 중복 공백 및 문장 마침표 처리
     text = re.sub(r'  +', ' ', text)
-    text = fix_serial_predicates(text)
     return text
 
-
-def count_corrections(original: str, corrected: str) -> int:
-    """Count approximate number of individual corrections made."""
-    matcher = difflib.SequenceMatcher(None, original.split(), corrected.split())
-    return sum(1 for op, *_ in matcher.get_opcodes() if op != 'equal')
-
-
-def highlight_diff_html(original: str, corrected: str) -> str:
-    """Character-level diff as HTML with red deletions and green insertions."""
-    matcher = difflib.SequenceMatcher(None, original, corrected, autojunk=False)
-    parts = []
-    for op, i1, i2, j1, j2 in matcher.get_opcodes():
-        if op == 'equal':
-            parts.append(original[i1:i2].replace('\n', '<br>'))
-        elif op == 'replace':
-            parts.append(
-                f'<del style="background:#ffd0d0;color:#a00;text-decoration:line-through;">'
-                f'{original[i1:i2].replace(chr(10), "<br>")}</del>'
-                f'<ins style="background:#d0ffd0;color:#060;text-decoration:none;font-style:normal;">'
-                f'{corrected[j1:j2].replace(chr(10), "<br>")}</ins>'
-            )
-        elif op == 'delete':
-            parts.append(
-                f'<del style="background:#ffd0d0;color:#a00;text-decoration:line-through;">'
-                f'{original[i1:i2].replace(chr(10), "<br>")}</del>'
-            )
-        elif op == 'insert':
-            parts.append(
-                f'<ins style="background:#d0ffd0;color:#060;text-decoration:none;font-style:normal;">'
-                f'{corrected[j1:j2].replace(chr(10), "<br>")}</ins>'
-            )
-    return ''.join(parts)
-
-
-# ── 한국어 배터리 용어 선치환 ─────────────────────────────────────────────────
-_KO_TERMS = [
-    ('양극 활물질',       'cathode active material'),
-    ('양극활물질',        'cathode active material'),
-    ('음극 활물질',       'anode active material'),
-    ('음극활물질',        'anode active material'),
-    ('양극재',            'cathode material'),
-    ('음극재',            'anode material'),
-    ('양극',              'cathode'),
-    ('음극',              'anode'),
-    ('전해질',            'electrolyte'),
-    ('집전체',            'current collector'),
-    ('바인더',            'binder'),
-    ('활물질',            'active material'),
-    ('초기 쿨롱 효율',    'initial Coulombic efficiency'),
-    ('쿨롱 효율',         'Coulombic efficiency'),
-    ('용량유지율',        'capacity retention'),
-    ('용량 유지율',       'capacity retention'),
-    ('율특성',            'rate capability'),
-    ('부피팽창',          'volume expansion'),
-    ('부피 팽창',         'volume expansion'),
-    ('분쇄',              'pulverization'),
-    ('전기화학적',        'electrochemical'),
-    ('고체 전해질 계면',  'solid electrolyte interphase'),
-    ('SEI막',             'SEI layer'),
-    ('SEI 막',            'SEI layer'),
-]
-
-
-def is_korean(text: str) -> bool:
-    korean_chars = sum(1 for c in text if '가' <= c <= '힣' or 'ᄀ' <= c <= 'ᇿ')
-    return korean_chars >= 10
-
-
-def preprocess_korean(text: str) -> str:
-    for ko, en in _KO_TERMS:
-        text = text.replace(ko, en)
-    return text
-
-
-def process(input_text: str):
-    """Returns (original_en, corrected, mode)."""
-    if is_korean(input_text):
-        preprocessed = preprocess_korean(input_text)
+def translate(korean_text: str) -> str:
+    # 한국어 입력 시 번역 + 교정
+    if any(ord(c) > 128 for c in korean_text[:100]):
         translator = GoogleTranslator(source='ko', target='en')
-        paras = [p.strip() for p in preprocessed.split('\n\n') if p.strip()]
-        translated = '\n\n'.join(translator.translate(p) for p in paras)
-        corrected = apply_style_rules(translated)
-        return translated, corrected, 'translate'
+        paras = [p.strip() for p in korean_text.split('\n\n') if p.strip()]
+        return '\n\n'.join([apply_academic_refinement(translator.translate(p)) for p in paras])
+    # 영어 입력 시 'GPT 냄새 제거' 전용 교정 모드
     else:
-        corrected = apply_style_rules(input_text)
-        return input_text, corrected, 'edit'
+        paras = [p.strip() for p in korean_text.split('\n\n') if p.strip()]
+        return '\n\n'.join([apply_academic_refinement(p) for p in paras])
 
+# ── Word & UI 로직 (12pt, 양쪽맞춤, 2글자들여쓰기 강제) ─────────────────────
+_SUP_SUB_PAT = re.compile(r'(?<=[.!?])(\d+(?:[,\s\-–−]\s*\d+)*)|(?<=[A-Za-z])([-–−]\d+)|(Li\+)|(?<=[A-Za-z])(\d+)')
 
-# ── 첨자 패턴 (6그룹) ────────────────────────────────────────────────────────
-# G1 : 인용번호  ".1,2"  ".9-11"              → 윗첨자
-# G2 : 단위 지수  "g-1"  "cm-2"               → 윗첨자  (글자 뒤 dash+숫자)
-# G3 : Li+                                    → Li⁺  (전용)
-# G4 : 부호만, 글자 뒤  "Na+"  "Cl-"  "COO-" → 윗첨자
-# G5 : 이온 전하, 숫자 뒤  "-SO3-" trailing  → 윗첨자  (CO2-based는 제외)
-# G6 : 화학식 아랫첨자  "TiO2"  "SO3"         → 아랫첨자
-#
-# 순서 보장: G2(글자→dash+숫자)가 G6(글자→숫자)보다 먼저라 "g-1"은 윗첨자로 처리됨.
-# G5(숫자→부호) lookahead로 "CO2-based" 오탐 방지.
-_SUP_SUB_PAT = re.compile(
-    r'(?<=[.!?])(\d+(?:[,\s\-–−]\s*\d+)*)'           # G1 citations
-    r'|(?<=[A-Za-z])([-–−]\d+)'                       # G2 unit exponent: g-1
-    r'|(Li\+)'                                         # G3 Li+
-    r'|(?<=[A-Za-z])([+\-−])(?=[^A-Za-z0-9]|$)'      # G4 sign after letter: Na+, Cl-
-    r'|(?<=\d)([+\-−])(?![A-Za-z0-9])'               # G5 charge after digit: SO3-
-    r'|(?<=[A-Za-z])(\d+)'                             # G6 subscript: TiO2, SO3
-)
-
-# 작용기 prefix 하이픈 → en dash: "-SO3-" "COO-" 앞 "-" 등
-# 글자/숫자가 아닌 것 뒤에서 대문자+글자/숫자가 오는 경우만 변환
-_PREFIX_DASH = re.compile(r'(?<![A-Za-z0-9])-(?=[A-Z][A-Za-z0-9])')
-
-
-def _to_sup(s: str) -> str:
-    table = {'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵',
-             '6':'⁶','7':'⁷','8':'⁸','9':'⁹',
-             '+':'⁺','-':'⁻','–':'⁻','−':'⁻'}
-    return ''.join(table.get(c, c) for c in s)
-
-_SUB_MAP = str.maketrans('0123456789', '₀₁₂₃₄₅₆₇₈₉')
-
+def build_docx(text: str) -> bytes:
+    doc = Document()
+    style = doc.styles['Normal']
+    style.font.name = 'Times New Roman'
+    style.font.size = Pt(12)
+    style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+    for block in text.split('\n\n'):
+        if not block.strip(): continue
+        p = doc.add_paragraph()
+        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
+        p.paragraph_format.first_line_indent = Pt(24) # 2글자 들여쓰기
+        p.paragraph_format.space_after = Pt(12)
+        pos = 0
+        for m in _SUP_SUB_PAT.finditer(block):
+            if m.start() > pos: _run(p, block[pos:m.start()])
+            m1, m2, m3, m4 = m.groups()
+            if m1: _run(p, m1, sup=True)
+            elif m2: _run(p, m2.replace('-', '–').replace('−', '–'), sup=True)
+            elif m3:
+                _run(p, "Li")
+                _run(p, "+", sup=True)
+            elif m4: _run(p, m4, sub=True)
+            pos = m.end()
+        if pos < len(block): _run(p, block[pos:])
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
 
 def _run(paragraph, text, sup=False, sub=False):
     run = paragraph.add_run(text)
@@ -291,139 +120,40 @@ def _run(paragraph, text, sup=False, sub=False):
     if sub: run.font.subscript = True
     return run
 
-
-def _apply_sup_sub_docx(p, block: str):
-    """첨자 패턴을 찾아 Word run으로 분리 삽입."""
-    pos = 0
-    for m in _SUP_SUB_PAT.finditer(block):
-        if m.start() > pos:
-            _run(p, block[pos:m.start()])
-        g1, g2, g3, g4, g5, g6 = m.groups()
-        dash = lambda s: s.replace('-', '–').replace('−', '–')
-        if g1:   _run(p, g1, sup=True)
-        elif g2: _run(p, dash(g2), sup=True)
-        elif g3: _run(p, 'Li'); _run(p, '+', sup=True)
-        elif g4: _run(p, dash(g4), sup=True)
-        elif g5: _run(p, dash(g5), sup=True)
-        elif g6: _run(p, g6, sub=True)
-        pos = m.end()
-    if pos < len(block):
-        _run(p, block[pos:])
-
-
-def build_docx(text: str) -> bytes:
-    doc = Document()
-    style = doc.styles['Normal']
-    style.font.name = 'Times New Roman'
-    style.font.size = Pt(12)
-    style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
-    for block in text.split('\n\n'):
-        if not block.strip():
-            continue
-        block = _PREFIX_DASH.sub('–', block)   # "-SO3-" prefix → en dash
-        p = doc.add_paragraph()
-        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
-        p.paragraph_format.first_line_indent = Pt(24)
-        p.paragraph_format.space_after = Pt(12)
-        _apply_sup_sub_docx(p, block)
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
-
-
 def web_display_format(text: str) -> str:
-    text = _PREFIX_DASH.sub('–', text)   # "-SO3-" prefix → en dash
-
+    sup_map = str.maketrans("0123456789+-–−", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁻")
+    sub_map = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
     def _repl(m):
-        g1, g2, g3, g4, g5, g6 = m.groups()
-        if g1: return _to_sup(g1)
-        if g2: return _to_sup(g2)
-        if g3: return 'Li⁺'
-        if g4: return _to_sup(g4)
-        if g5: return _to_sup(g5)
-        if g6: return g6.translate(_SUB_MAP)
+        m1, m2, m3, m4 = m.groups()
+        if m1: return m1.translate(sup_map)
+        if m2: return m2.replace('-', '–').replace('−', '–').translate(sup_map)
+        if m3: return "Li⁺"
+        if m4: return m4.translate(sub_map)
         return m.group()
-
     return _SUP_SUB_PAT.sub(_repl, text)
 
+# ── Streamlit UI ──────────────────────────────────────────────────────────
+st.set_page_config(page_title="논문 스타일 교정기", page_icon="🔋", layout="wide")
+st.title("🔋 배터리 논문 스타일 교정 및 번역")
+st.markdown("입력된 텍스트에서 **GPT 특유의 미사여구를 제거**하고 **교수님 선호 문체**로 강제 교정합니다.")
 
-# ── Streamlit UI ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="배터리 논문 번역기", page_icon="🔋", layout="wide")
-st.title("🔋 배터리 논문 전문 번역기")
-st.caption("한국어 → 번역 + 스타일 교정 · 영어 → 스타일 교정만 · 완전 무료")
-
-for key in ('original_en', 'corrected', 'mode'):
-    if key not in st.session_state:
-        st.session_state[key] = ''
+if "translation" not in st.session_state: st.session_state.translation = ""
 
 col_left, col_right = st.columns(2)
-
 with col_left:
-    user_input = st.text_area(
-        "입력 (한국어 또는 영어)",
-        height=500,
-        placeholder="한국어 → 번역 후 스타일 교정\n영어 → 스타일 교정만 적용\n\n텍스트를 붙여넣고 버튼을 누르세요.",
-    )
-
-    if st.button("번역 / 교정하기", type="primary", use_container_width=True):
-        if user_input.strip():
-            with st.spinner("처리 중..."):
-                try:
-                    orig, corr, mode = process(user_input)
-                    st.session_state.original_en = orig
-                    st.session_state.corrected = corr
-                    st.session_state.mode = mode
-                except Exception as e:
-                    st.error(f"오류: {e}")
+    user_input = st.text_area("텍스트 입력 (한글: 번역+교정 / 영어: 스타일 교정)", height=550)
+    if st.button("스타일 교정 및 번역 실행", type="primary", use_container_width=True):
+        if user_input:
+            with st.spinner("GPT 냄새 제거 및 스타일 교정 중..."):
+                st.session_state.translation = translate(user_input)
 
 with col_right:
-    if st.session_state.corrected:
-        orig = st.session_state.original_en
-        corr = st.session_state.corrected
-        mode = st.session_state.mode
-        n_corrections = count_corrections(orig, corr)
-
-        if mode == 'translate':
-            st.success(f"번역 완료 · 스타일 교정 {n_corrections}건")
-        else:
-            if n_corrections == 0:
-                st.warning("교정 사항 없음 — 이미 논문 스타일에 맞는 표현입니다.")
-            else:
-                st.success(f"교정 완료 · {n_corrections}건 수정")
-
-        st.download_button(
-            "📥 Word 다운로드",
-            data=build_docx(corr),
-            file_name="paper_output.docx",
-            use_container_width=True,
-        )
-
-        _CARD = ('font-family:serif;font-size:1.05rem;line-height:2.0;'
-                 'padding:20px;background:#fafafa;border-radius:10px;')
-
-        # 영어 교정 모드: diff 탭 / 결과만 탭 분리
-        if mode == 'edit' and n_corrections > 0:
-            # 첨자 변환을 먼저 적용한 뒤 diff 계산 → 양쪽 모두 올바른 첨자 표시
-            orig_fmt = web_display_format(orig).replace(chr(10), '<br>')
-            corr_fmt = web_display_format(corr).replace(chr(10), '<br>')
-            tab_diff, tab_clean = st.tabs(["🔍 변경사항 표시", "📄 교정본만 보기"])
-            with tab_diff:
-                st.markdown(
-                    f'<div style="{_CARD}">{highlight_diff_html(orig_fmt, corr_fmt)}</div>',
-                    unsafe_allow_html=True,
-                )
-            with tab_clean:
-                st.markdown(
-                    f'<div style="{_CARD}text-align:justify;">{corr_fmt}</div>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            corr_fmt = web_display_format(corr).replace(chr(10), '<br>')
-            st.markdown(
-                f'<div style="{_CARD}text-align:justify;">{corr_fmt}</div>',
-                unsafe_allow_html=True,
-            )
-    else:
-        st.info("결과가 여기에 표시됩니다.")
+    if st.session_state.translation:
+        st.download_button("📥 Word 다운로드 (12pt, 양쪽맞춤, 2글자들여쓰기)", 
+                           data=build_docx(st.session_state.translation), 
+                           file_name="battery_paper_style.docx",
+                           use_container_width=True)
+        st.markdown(f'<div style="font-family:serif; font-size:1.15rem; text-align:justify; line-height:2.0; padding:25px; background-color:#ffffff; border:1px solid #ddd; border-radius:10px; color:#111;">'
+                    f'{web_display_format(st.session_state.translation).replace("\n", "<br>")}'
+                    f'</div>', unsafe_allow_html=True)
+    else: st.info("교정 결과가 여기에 표시됩니다.")
