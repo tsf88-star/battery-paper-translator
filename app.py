@@ -8,78 +8,69 @@ from docx.shared import Pt, Cm
 from docx.enum.text import WD_LINE_SPACING, WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 
-# ── [고강도] GPT 냄새 제거 및 배터리 논문 스타일 교정 규칙 ──────────────────────
-# 스타일 파일(merged_corpus)과 교수님 피드백을 반영한 강제 치환 목록
+# ── [고강도] 스타일 교정 규칙 및 설명 ──────────────────────────────────────────
+# (패턴, 교체어, 설명)
 RULES = [
-    # 1. GPT 특유의 화려한 미사여구 제거 (Battery Paper Style로 교체)
-    (r'\bunprecedented demands\b', 'stringent requirements', re.IGNORECASE),
-    (r'\bremarkable capacity\b', 'outstanding specific capacity', re.IGNORECASE),
-    (r'\bplaced unprecedented demands on\b', 'imposed stringent requirements on', re.IGNORECASE),
-    (r'\bpaving the way for\b', 'providing a pathway for', re.IGNORECASE),
-    (r'\bundermines its practical deployment\b', 'limits its practical viability', re.IGNORECASE),
-    (r'\bculminating in\b', 'resulting in', re.IGNORECASE),
-    (r'\bunderscore the need\b', 'highlight the necessity', re.IGNORECASE),
-    (r'\bAt a loading of only\b', 'With a trace loading of', re.IGNORECASE),
-    (r'\bdisproportionate set of\b', 'significant', re.IGNORECASE),
-    
-    # 2. 교수님 절대 선호 어휘 (degrade, exhibit, attribute)
-    (r'\bfading\b', 'degradation', re.IGNORECASE), # capacity fading -> capacity degradation
-    (r'\bdeteriorat\w*\b', 'degrad', re.IGNORECASE),
-    (r'\bdecay\w*\b', 'degrad', re.IGNORECASE),
-    (r'\bfad(e|es|ed|ing)\b', 'degrad$1', re.IGNORECASE),
-    (r'\bdemonstrate(s|d)?\b', 'exhibit$1', re.IGNORECASE),
-    (r'\bshow(s|ed)?\b', 'exhibit$1', re.IGNORECASE),
-    (r'\brepresent(s|ed)?\b', 'act$1 as', re.IGNORECASE),
-    
-    # 3. 인과관계 및 원인 귀속 (is attributed to)
-    (r'\b(?:is|are) due to\b', 'is attributed to', re.IGNORECASE),
-    (r'\b(?:is|are) caused by\b', 'is attributed to', re.IGNORECASE),
-    (r'\bowing to\b', 'attributed to', re.IGNORECASE),
-    (r'\bthanks to\b', 'owing to', re.IGNORECASE),
-    (r'\bgive(s)? rise to\b', 'lead$1 to', re.IGNORECASE),
-    
-    # 4. 성능 관련 (enhance 선호)
-    (r'\bimprove(s|d)?\b', 'enhance$1', re.IGNORECASE),
-    (r'\bboost(s|ed)?\b', 'enhance$1', re.IGNORECASE),
-    
-    # 5. 문장 연결 및 접속사 (학술적 권장)
-    (r'\bYet\b', 'However,', re.IGNORECASE),
-    (r'\bAlso,\b', 'Furthermore,', 0),
-    (r'\bBut,\b', 'However,', 0),
-    (r'\bIn this paper\b', 'In this work', re.IGNORECASE),
-    (r'\bfig\.\b', 'Figure', re.IGNORECASE),
-    
-    # 6. 배터리 전문 용어
-    (r'\bnegative electrode\b', 'anode', re.IGNORECASE),
-    (r'\bpositive electrode\b', 'cathode', re.IGNORECASE),
-    (r'\bcoulombic efficiency\b', 'Coulombic efficiency', 0),
-    (r'\bice\b(?=\s+is)', 'initial Coulombic efficiency (ICE)', re.IGNORECASE),
+    (r'\bunprecedented demands\b', 'stringent requirements', 'GPT 미사여구 제거 (unprecedented -> stringent)'),
+    (r'\bremarkable capacity\b', 'outstanding specific capacity', 'GPT 미사여구 제거 (remarkable -> outstanding)'),
+    (r'\bplaced unprecedented demands on\b', 'imposed stringent requirements on', 'GPT 미사여구 제거'),
+    (r'\bpaving the way for\b', 'providing a pathway for', '학술적 표현으로 교정'),
+    (r'\bundermines its practical deployment\b', 'limits its practical viability', '학술적 표현으로 교정'),
+    (r'\bculminating in\b', 'resulting in', 'GPT 냄새 제거 (culminating -> resulting)'),
+    (r'\bunderscore the need\b', 'highlight the necessity', '학술적 동사로 교체'),
+    (r'\bAt a loading of only\b', 'With a trace loading of', '표현 고도화'),
+    (r'\bdisproportionate set of\b', 'significant', '불필요한 수식어 압축'),
+    (r'\bfading\b', 'degradation', '교수님 선호 (fading -> degradation)'),
+    (r'\bdeteriorat\w*\b', 'degrad', '교수님 선호 (deteriorate -> degrade)'),
+    (r'\bdecay\w*\b', 'degrad', '교수님 선호 (decay -> degrade)'),
+    (r'\bfad(e|es|ed|ing)\b', 'degrad$1', '교수님 선호 (fade -> degrade)'),
+    (r'\bdemonstrate(s|d)?\b', 'exhibit$1', '결과 보고 동사 교정 (demonstrate -> exhibit)'),
+    (r'\bshow(s|ed)?\b', 'exhibit$1', '결과 보고 동사 교정 (show -> exhibit)'),
+    (r'\brepresent(s|ed)?\b', 'act$1 as', '능동적 표현으로 교정 (represent -> act as)'),
+    (r'\b(?:is|are) due to\b', 'is attributed to', '원인 귀속 구문 고도화 (due to -> attributed to)'),
+    (r'\b(?:is|are) caused by\b', 'is attributed to', '원인 귀속 구문 고도화'),
+    (r'\bowing to\b', 'attributed to', '원인 귀속 구문 고도화'),
+    (r'\bthanks to\b', 'owing to', '학술적 표현으로 교환'),
+    (r'\bgive(s)? rise to\b', 'lead$1 to', '간결한 표현으로 교환'),
+    (r'\binduce(s|d)?\b', 'trigger$1', '동사 선택 고도화'),
+    (r'\bimprove(s|d)?\b', 'enhance$1', '교수님 선호 (improve -> enhance)'),
+    (r'\bboost(s|ed)?\b', 'enhance$1', '교수님 선호 (boost -> enhance)'),
+    (r'\bAlso,\b', 'Furthermore,', '문장 연결어 격상'),
+    (r'\bBut,\b', 'However,', '문장 연결어 격상'),
+    (r'\bYet\b', 'However,', '문장 연결어 격상'),
+    (r'\bIn this paper\b', 'In this work', '관례적 표현 교정'),
+    (r'\bfig\.\b', 'Figure', '약어 풀어서 표기'),
+    (r'\bnegative electrode\b', 'anode', '배터리 전문 용어 고정'),
+    (r'\bpositive electrode\b', 'cathode', '배터리 전문 용어 고정'),
 ]
 
-def apply_academic_refinement(text: str) -> str:
-    # 1. 고강도 규칙 적용
-    for pattern, repl, flags in RULES:
-        text = re.sub(pattern, repl, text, flags=flags) if flags else re.sub(pattern, repl, text)
+def refine_with_log(text):
+    changes = []
+    refined_text = text
+    for pattern, repl, desc in RULES:
+        if re.search(pattern, refined_text, re.IGNORECASE):
+            # 실제 바뀐 단어 확인을 위해 매칭된 부분 저장
+            matches = re.findall(pattern, refined_text, re.IGNORECASE)
+            if matches:
+                changes.append(f"✅ {desc}")
+                refined_text = re.sub(pattern, repl, refined_text, flags=re.IGNORECASE)
     
-    # 2. Si-based 등 하이픈 자동 교정
-    text = re.sub(r'\b(\w+)\s+based(?!\s+on)\b', r'\1-based', text, flags=re.IGNORECASE)
+    # 하이픈 규칙 등 자동 교정
+    if re.search(r'\b(\w+)\s+based(?!\s+on)\b', refined_text, re.IGNORECASE):
+        changes.append("✅ 하이픈 자동 교정 (e.g., Si based -> Si-based)")
+        refined_text = re.sub(r'\b(\w+)\s+based(?!\s+on)\b', r'\1-based', refined_text, flags=re.IGNORECASE)
     
-    # 3. 중복 공백 및 문장 마침표 처리
-    text = re.sub(r'  +', ' ', text)
-    return text
+    return refined_text, list(set(changes))
 
-def translate(korean_text: str) -> str:
-    # 한국어 입력 시 번역 + 교정
-    if any(ord(c) > 128 for c in korean_text[:100]):
-        translator = GoogleTranslator(source='ko', target='en')
-        paras = [p.strip() for p in korean_text.split('\n\n') if p.strip()]
-        return '\n\n'.join([apply_academic_refinement(translator.translate(p)) for p in paras])
-    # 영어 입력 시 'GPT 냄새 제거' 전용 교정 모드
+def translate(text):
+    is_korean = any(ord(c) > 128 for c in text[:100])
+    if is_korean:
+        raw = GoogleTranslator(source='ko', target='en').translate(text)
     else:
-        paras = [p.strip() for p in korean_text.split('\n\n') if p.strip()]
-        return '\n\n'.join([apply_academic_refinement(p) for p in paras])
+        raw = text
+    return refine_with_log(raw)
 
-# ── Word & UI 로직 (12pt, 양쪽맞춤, 2글자들여쓰기 강제) ─────────────────────
+# ── Word & UI 로직 ──────────────────────────────────────────────────────────
 _SUP_SUB_PAT = re.compile(r'(?<=[.!?])(\d+(?:[,\s\-–−]\s*\d+)*)|(?<=[A-Za-z])([-–−]\d+)|(Li\+)|(?<=[A-Za-z])(\d+)')
 
 def build_docx(text: str) -> bytes:
@@ -93,7 +84,7 @@ def build_docx(text: str) -> bytes:
         p = doc.add_paragraph()
         p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
-        p.paragraph_format.first_line_indent = Pt(24) # 2글자 들여쓰기
+        p.paragraph_format.first_line_indent = Pt(24)
         p.paragraph_format.space_after = Pt(12)
         pos = 0
         for m in _SUP_SUB_PAT.finditer(block):
@@ -132,28 +123,38 @@ def web_display_format(text: str) -> str:
         return m.group()
     return _SUP_SUB_PAT.sub(_repl, text)
 
-# ── Streamlit UI ──────────────────────────────────────────────────────────
+# ── UI ───────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="논문 스타일 교정기", page_icon="🔋", layout="wide")
 st.title("🔋 배터리 논문 스타일 교정 및 번역")
-st.markdown("입력된 텍스트에서 **GPT 특유의 미사여구를 제거**하고 **교수님 선호 문체**로 강제 교정합니다.")
 
 if "translation" not in st.session_state: st.session_state.translation = ""
+if "changes" not in st.session_state: st.session_state.changes = []
 
 col_left, col_right = st.columns(2)
 with col_left:
-    user_input = st.text_area("텍스트 입력 (한글: 번역+교정 / 영어: 스타일 교정)", height=550)
-    if st.button("스타일 교정 및 번역 실행", type="primary", use_container_width=True):
+    user_input = st.text_area("텍스트 입력 (한글/영어)", height=500)
+    if st.button("교정 실행", type="primary", use_container_width=True):
         if user_input:
-            with st.spinner("GPT 냄새 제거 및 스타일 교정 중..."):
-                st.session_state.translation = translate(user_input)
+            with st.spinner("스타일 분석 및 교정 중..."):
+                res, logs = translate(user_input)
+                st.session_state.translation = res
+                st.session_state.changes = logs
 
 with col_right:
     if st.session_state.translation:
-        st.download_button("📥 Word 다운로드 (12pt, 양쪽맞춤, 2글자들여쓰기)", 
-                           data=build_docx(st.session_state.translation), 
-                           file_name="battery_paper_style.docx",
-                           use_container_width=True)
-        st.markdown(f'<div style="font-family:serif; font-size:1.15rem; text-align:justify; line-height:2.0; padding:25px; background-color:#ffffff; border:1px solid #ddd; border-radius:10px; color:#111;">'
-                    f'{web_display_format(st.session_state.translation).replace("\n", "<br>")}'
-                    f'</div>', unsafe_allow_html=True)
-    else: st.info("교정 결과가 여기에 표시됩니다.")
+        tab1, tab2 = st.tabs(["✨ 교정 완료 본문", "📝 스타일 수정 사항"])
+        
+        with tab1:
+            st.download_button("📥 Word 다운로드", data=build_docx(st.session_state.translation), file_name="refined_paper.docx")
+            st.markdown(f'<div style="font-family:serif; font-size:1.15rem; text-align:justify; line-height:2.0; padding:25px; background-color:#ffffff; border:1px solid #ddd; border-radius:10px; color:#111;">'
+                        f'{web_display_format(st.session_state.translation).replace("\n", "<br>")}'
+                        f'</div>', unsafe_allow_html=True)
+        
+        with tab2:
+            if st.session_state.changes:
+                for change in st.session_state.changes:
+                    st.info(change)
+            else:
+                st.success("수정 사항 없음: 이미 완벽한 배터리 논문 스타일입니다!")
+    else:
+        st.info("결과가 여기에 표시됩니다.")
