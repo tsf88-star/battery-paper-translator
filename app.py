@@ -111,10 +111,55 @@ RULES = [
 ]
 
 
+# ── Serial-predicate splitter ─────────────────────────────────────────────────
+# "X suppresses A, improves B, and enhances C." →
+# "X suppresses A and improves B. It also enhances C."
+_AV = (
+    r'(?:(?:effectively|significantly|greatly|markedly|substantially|'
+    r'considerably|directly|largely|successfully)\s+)?'
+    r'(?:suppress|accommodate|alleviate|improve|enhance|reduce|increase|'
+    r'provide|enable|prevent|facilitate|allow|promote|inhibit|maintain|'
+    r'retain|achieve|generate|produce|form|stabilize|strengthen|mitigate|'
+    r'minimize|maximize|demonstrate|exhibit|show|offer|deliver|create|'
+    r'modify|restrict|extend|limit|accelerate|buffer|absorb|distribute|'
+    r'transfer|conduct|store|release|trap|anchor|bind|coat|protect|'
+    r'diffuse|migrate|deposit|dissolve|expand|contract|crack|fracture|'
+    r'initiate|propagate|intercalate|grow|shrink|contribute|lead|'
+    r'affect|influence|control|determine|govern|activate|deactivate|'
+    r'degrade|boost|lower|raise|elevate|eliminate|induce|trigger|'
+    r'decrease|promote)[a-z]*'
+)
+_AND_VERB = re.compile(r',\s+and\s+(' + _AV + r')(.*?)([.!?])$', re.IGNORECASE)
+_COMMA_VERB = re.compile(_AV, re.IGNORECASE)
+
+
+def _fix_triple_predicate(sent: str) -> str:
+    m = _AND_VERB.search(sent)
+    if not m:
+        return sent
+    before_and = sent[:m.start()]
+    last_comma = before_and.rfind(',')
+    if last_comma < 0:
+        return sent
+    after_last_comma = before_and[last_comma + 1:].lstrip()
+    if not _COMMA_VERB.match(after_last_comma):
+        return sent
+    first_part = before_and[:last_comma] + ' and ' + after_last_comma
+    third_clause = m.group(1) + m.group(2)
+    end = m.group(3)
+    return first_part.rstrip() + end + ' It also ' + third_clause.strip() + end
+
+
+def fix_serial_predicates(text: str) -> str:
+    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
+    return ' '.join(_fix_triple_predicate(s) for s in sentences)
+
+
 def apply_style_rules(text: str) -> str:
     for pattern, repl, flags in RULES:
         text = re.sub(pattern, repl, text, flags=flags) if flags else re.sub(pattern, repl, text)
     text = re.sub(r'  +', ' ', text)
+    text = fix_serial_predicates(text)
     return text
 
 
