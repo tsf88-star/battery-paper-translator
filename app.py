@@ -48,13 +48,12 @@ def translate(korean_text: str) -> str:
     translated_parts = [apply_style_rules(translator.translate(p)) for p in paras]
     return '\n\n'.join(translated_parts)
 
-# ── 화학식 및 첨자 처리 (Word & Web) ──────────────────────────────────────────
-# 1) Citations (.1,2), 2) Exponents (g-1), 3) Li+, 4) Chemical Subscripts (O2, Li4)
+# ── 화학식 및 첨자 처리 ───────────────────────────────────────────────────────
 _SUP_SUB_PAT = re.compile(
     r'(?<=[.!?])(\d+(?:[,\s\-–−]\s*\d+)*)'  # 1. 인용 (윗첨자)
-    r'|(?<=[A-Za-z])([-–−]\d+)'              # 2. 지수 (윗첨자: g-1)
-    r'|(Li\+)'                               # 3. 리튬 이온 (Li+)
-    r'|(?<=[A-Za-z])(\d+)'                   # 4. 화학식 숫자 (아래첨자: O2)
+    r'|(?<=[A-Za-z])([-–−]\d+)'              # 2. 지수 (윗첨자)
+    r'|(Li\+)'                               # 3. 리튬 이온
+    r'|(?<=[A-Za-z])(\d+)'                   # 4. 화학식 숫자 (아래첨자)
 )
 
 def build_docx(text: str) -> bytes:
@@ -67,8 +66,11 @@ def build_docx(text: str) -> bytes:
     for block in text.split('\n\n'):
         if not block.strip(): continue
         p = doc.add_paragraph()
+        
+        # 단락 설정: 줄간격 2.0 (Double), 첫 줄 들여쓰기 1.27cm (0.5 inch), 단락 후 간격 12pt
         p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
         p.paragraph_format.first_line_indent = Cm(1.27)
+        p.paragraph_format.space_after = Pt(12)
         
         pos = 0
         for m in _SUP_SUB_PAT.finditer(block):
@@ -76,17 +78,12 @@ def build_docx(text: str) -> bytes:
                 _run(p, block[pos:m.start()])
             
             m1, m2, m3, m4 = m.groups()
-            if m1: # Citation
-                _run(p, m1, sup=True)
-            elif m2: # Exponent (e.g., -1)
-                # 마이너스 기호를 en dash(–)로 변환
-                fixed_m2 = m2.replace('-', '–').replace('−', '–')
-                _run(p, fixed_m2, sup=True)
-            elif m3: # Li+
+            if m1: _run(p, m1, sup=True)
+            elif m2: _run(p, m2.replace('-', '–').replace('−', '–'), sup=True)
+            elif m3:
                 _run(p, "Li")
                 _run(p, "+", sup=True)
-            elif m4: # Chemical Subscript
-                _run(p, m4, sub=True)
+            elif m4: _run(p, m4, sub=True)
             pos = m.end()
         
         if pos < len(block):
@@ -106,11 +103,8 @@ def _run(paragraph, text, sup=False, sub=False):
     return run
 
 def web_display_format(text: str) -> str:
-    """웹 화면용 유니코드 첨자 변환 (en dash 포함)"""
-    # ⁰¹²³⁴⁵⁶⁷⁸⁹, ⁺, ⁻(superscript minus, en dash 대용)
     sup_map = str.maketrans("0123456789+-–−", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁻")
     sub_map = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
-    
     def _repl(m):
         m1, m2, m3, m4 = m.groups()
         if m1: return m1.translate(sup_map)
@@ -118,7 +112,6 @@ def web_display_format(text: str) -> str:
         if m3: return "Li⁺"
         if m4: return m4.translate(sub_map)
         return m.group()
-
     return _SUP_SUB_PAT.sub(_repl, text)
 
 # ── Streamlit UI ──────────────────────────────────────────────────────────────
@@ -137,7 +130,7 @@ with col_left:
 
 with col_right:
     if st.session_state.translation:
-        st.download_button("📥 Word 다운로드 (12pt, en dash 반영)", 
+        st.download_button("📥 Word 다운로드 (12pt, Double Spacing)", 
                            data=build_docx(st.session_state.translation), 
                            file_name="translated_paper.docx",
                            use_container_width=True)
