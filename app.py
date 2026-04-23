@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 import streamlit as st
 from deep_translator import GoogleTranslator
 
@@ -175,6 +176,8 @@ st.divider()
 
 if "translation" not in st.session_state:
     st.session_state.translation = ""
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 col_left, col_mid, col_right = st.columns([5, 1, 5])
 
@@ -202,6 +205,12 @@ with col_right:
                 try:
                     result = translate(korean_input)
                     st.session_state.translation = result
+                    st.session_state.history.insert(0, {
+                        "korean": korean_input,
+                        "english": result,
+                        "time": datetime.now().strftime("%m/%d %H:%M"),
+                    })
+                    st.session_state.history = st.session_state.history[:20]
                 except Exception as e:
                     st.error(f"번역 오류: {e}")
 
@@ -209,4 +218,22 @@ with col_right:
         st.markdown(st.session_state.translation)
     elif not clicked:
         st.info("왼쪽에 한국어 텍스트를 입력하고 '번역 →' 버튼을 누르세요.")
+
+# ── 번역 내역 사이드바 ────────────────────────────────────────────────────────
+with st.sidebar:
+    st.subheader("번역 내역")
+    if st.session_state.history:
+        if st.button("내역 전체 삭제", use_container_width=True):
+            st.session_state.history = []
+            st.rerun()
+        st.divider()
+        for i, item in enumerate(st.session_state.history):
+            preview = item["korean"].replace("\n", " ")[:35]
+            with st.expander(f"{item['time']} · {preview}…"):
+                st.caption("한국어 원문")
+                st.text(item["korean"])
+                st.caption("영어 번역")
+                st.text(item["english"])
+    else:
+        st.caption("번역하면 여기에 내역이 표시됩니다.")
 
