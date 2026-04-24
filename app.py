@@ -71,37 +71,18 @@ def translate(text):
     return refine_with_log(raw)
 
 # ── Word & UI 로직 ──────────────────────────────────────────────────────────
-_SUP_SUB_PAT = re.compile(r'(?<=[.!?])(\d+(?:[,\s\-–−]\s*\d+)*)|(?<=[A-Za-z])([-–−]\d+)|(Li\+)|(?<=[A-Za-z])(\d+)')
-
-def build_docx(text: str) -> bytes:
-    doc = Document()
-    style = doc.styles['Normal']
-    style.font.name = 'Times New Roman'
-    style.font.size = Pt(12)
-    style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
-    for block in text.split('\n\n'):
-        if not block.strip(): continue
-        p = doc.add_paragraph()
-        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
-        p.paragraph_format.first_line_indent = Pt(24)
-        p.paragraph_format.space_after = Pt(12)
-        pos = 0
-        for m in _SUP_SUB_PAT.finditer(block):
-            if m.start() > pos: _run(p, block[pos:m.start()])
-            m1, m2, m3, m4 = m.groups()
-            if m1: _run(p, m1, sup=True)
-            elif m2: _run(p, m2.replace('-', '–').replace('−', '–'), sup=True)
-            elif m3:
-                _run(p, "Li")
-                _run(p, "+", sup=True)
-            elif m4: _run(p, m4, sub=True)
-            pos = m.end()
-        if pos < len(block): _run(p, block[pos:])
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf.getvalue()
+# G1 인용번호  G2 단위지수(g-1)  G3 Li+  G4 부호/글자뒤(Na+,Cl-)
+# G5 이온전하/숫자뒤(SO3-)  G6 화학식 아랫첨자(TiO2)
+_SUP_SUB_PAT = re.compile(
+    r'(?<=[.!?])(\d+(?:[,\s\-–−]\s*\d+)*)'       # G1
+    r'|(?<=[A-Za-z])([-–−]\d+)'                   # G2
+    r'|(Li\+)'                                     # G3
+    r'|(?<=[A-Za-z])([+\-−])(?=[^A-Za-z0-9]|$)'  # G4
+    r'|(?<=\d)([+\-−])(?![A-Za-z0-9])'           # G5
+    r'|(?<=[A-Za-z])(\d+)'                         # G6
+)
+# 작용기 prefix 하이픈 → en dash: -SO3- 앞 '-' 등
+_PREFIX_DASH = re.compile(r'(?<![A-Za-z0-9])-(?=[A-Z][A-Za-z0-9])')
 
 def _run(paragraph, text, sup=False, sub=False):
     run = paragraph.add_run(text)
@@ -111,15 +92,49 @@ def _run(paragraph, text, sup=False, sub=False):
     if sub: run.font.subscript = True
     return run
 
+def build_docx(text: str) -> bytes:
+    doc = Document()
+    style = doc.styles['Normal']
+    style.font.name = 'Times New Roman'
+    style.font.size = Pt(12)
+    style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+    for block in text.split('\n\n'):
+        if not block.strip(): continue
+        block = _PREFIX_DASH.sub('–', block)
+        p = doc.add_paragraph()
+        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.DOUBLE
+        p.paragraph_format.first_line_indent = Pt(24)
+        p.paragraph_format.space_after = Pt(12)
+        pos = 0
+        for m in _SUP_SUB_PAT.finditer(block):
+            if m.start() > pos: _run(p, block[pos:m.start()])
+            g1,g2,g3,g4,g5,g6 = m.groups()
+            d = lambda s: s.replace('-','–').replace('−','–')
+            if g1:   _run(p, g1, sup=True)
+            elif g2: _run(p, d(g2), sup=True)
+            elif g3: _run(p, 'Li'); _run(p, '+', sup=True)
+            elif g4: _run(p, d(g4), sup=True)
+            elif g5: _run(p, d(g5), sup=True)
+            elif g6: _run(p, g6, sub=True)
+            pos = m.end()
+        if pos < len(block): _run(p, block[pos:])
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
 def web_display_format(text: str) -> str:
-    sup_map = str.maketrans("0123456789+-–−", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁻")
-    sub_map = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
+    text = _PREFIX_DASH.sub('–', text)
     def _repl(m):
-        m1, m2, m3, m4 = m.groups()
-        if m1: return m1.translate(sup_map)
-        if m2: return m2.replace('-', '–').replace('−', '–').translate(sup_map)
-        if m3: return "Li⁺"
-        if m4: return m4.translate(sub_map)
+        g1,g2,g3,g4,g5,g6 = m.groups()
+        d = lambda s: s.replace('-','–').replace('−','–')
+        if g1: return f'<sup>{g1}</sup>'
+        if g2: return f'<sup>{d(g2)}</sup>'
+        if g3: return 'Li<sup>+</sup>'
+        if g4: return f'<sup>{d(g4)}</sup>'
+        if g5: return f'<sup>{d(g5)}</sup>'
+        if g6: return f'<sub>{g6}</sub>'
         return m.group()
     return _SUP_SUB_PAT.sub(_repl, text)
 
